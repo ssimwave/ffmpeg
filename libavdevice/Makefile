@@ -52,6 +52,7 @@ OBJS-$(CONFIG_XV_OUTDEV)                 += xv.o
 # external libraries
 OBJS-$(CONFIG_LIBCDIO_INDEV)             += libcdio.o
 OBJS-$(CONFIG_LIBDC1394_INDEV)           += libdc1394.o
+OBJS-$(CONFIG_DELTACAST_INDEV)           += deltacast_dec.o deltacast/Tools.o
 
 # Windows resource file
 SLIBOBJS-$(HAVE_GNU_WINDRES)             += avdeviceres.o
