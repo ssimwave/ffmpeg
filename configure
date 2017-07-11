@@ -1749,6 +1749,7 @@ EXTERNAL_AUTODETECT_LIBRARY_LIST="
     sndio
     xlib
     zlib
+    videomasterhd
 "
 
 EXTERNAL_LIBRARY_GPL_LIST="

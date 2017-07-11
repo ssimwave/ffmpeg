@@ -59,6 +59,7 @@ extern const AVOutputFormat ff_xv_muxer;
 /* external libraries */
 extern const AVInputFormat  ff_libcdio_demuxer;
 extern const AVInputFormat  ff_libdc1394_demuxer;
+extern const AVInputFormat  ff_deltacast_demuxer;
 
 #include "libavdevice/outdev_list.c"
 #include "libavdevice/indev_list.c"
