@@ -2950,6 +2950,11 @@ static int set_side_data(HEVCContext *s)
         }
     }
 
+    // Store picture_structure, source_scan_type, and duplicate_flag
+    av_dict_set_int(&out->metadata, "picture_struct", s->sei.picture_timing.hevc_picture_struct, 0);
+    av_dict_set_int(&out->metadata, "source_scan_type", s->sei.picture_timing.hevc_picture_struct, 0);
+    av_dict_set_int(&out->metadata, "duplicate_flag", s->sei.picture_timing.duplicate_flag, 0);
+
     return 0;
 }
 
