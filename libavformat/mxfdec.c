@@ -3508,8 +3508,8 @@ static int mxf_read_packet(AVFormatContext *s, AVPacket *pkt)
                 } else {
                     if ((size = next_ofs - pos) <= 0) {
                         av_log(s, AV_LOG_ERROR, "bad size: %"PRId64"\n", size);
-                        ret = AVERROR_INVALIDDATA;
-                        goto skip;
+                        mxf->current_klv_data = (KLVPacket){{0}};
+                        return AVERROR_INVALIDDATA;
                     }
                     // We must not overread, because the next edit unit might be in another KLV
                     if (size > max_data_size)
@@ -3581,6 +3581,7 @@ static int mxf_read_close(AVFormatContext *s)
     for (i = 0; i < mxf->metadata_sets_count; i++) {
         mxf_free_metadataset(mxf->metadata_sets + i, 1);
     }
+    mxf->metadata_sets_count = 0;
     av_freep(&mxf->partitions);
     av_freep(&mxf->metadata_sets);
     av_freep(&mxf->aesc);
