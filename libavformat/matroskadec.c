@@ -97,8 +97,8 @@ typedef enum {
 typedef const struct EbmlSyntax {
     uint32_t id;
     EbmlType type;
-    int list_elem_size;
-    int data_offset;
+    size_t list_elem_size;
+    size_t data_offset;
     union {
         int64_t     i;
         uint64_t    u;
@@ -110,6 +110,7 @@ typedef const struct EbmlSyntax {
 
 typedef struct EbmlList {
     int nb_elem;
+    unsigned int alloc_elem_size;
     void *elem;
 } EbmlList;
 
@@ -757,7 +758,7 @@ static int matroska_reset_status(MatroskaDemuxContext *matroska,
                                  uint32_t id, int64_t position)
 {
     if (position >= 0) {
-        int err = avio_seek(matroska->ctx->pb, position, SEEK_SET);
+        int64_t err = avio_seek(matroska->ctx->pb, position, SEEK_SET);
         if (err < 0)
             return err;
     }
@@ -797,7 +798,7 @@ static int matroska_resync(MatroskaDemuxContext *matroska, int64_t last_pos)
             id == MATROSKA_ID_CLUSTER  || id == MATROSKA_ID_CHAPTERS) {
             /* Prepare the context for parsing of a level 1 element. */
             matroska_reset_status(matroska, id, -1);
-            /* Given that we are here means that an error has occured,
+            /* Given that we are here means that an error has occurred,
              * so treat the segment as unknown length in order not to
              * discard valid data that happens to be beyond the designated
              * end of the segment. */
@@ -1236,8 +1237,13 @@ static int ebml_parse(MatroskaDemuxContext *matroska,
         data = (char *) data + syntax->data_offset;
         if (syntax->list_elem_size) {
             EbmlList *list = data;
-            void *newelem = av_realloc_array(list->elem, list->nb_elem + 1,
-                                                   syntax->list_elem_size);
+            void *newelem;
+
+            if ((unsigned)list->nb_elem + 1 >= UINT_MAX / syntax->list_elem_size)
+                return AVERROR(ENOMEM);
+            newelem = av_fast_realloc(list->elem,
+                                      &list->alloc_elem_size,
+                                      (list->nb_elem + 1) * syntax->list_elem_size);
             if (!newelem)
                 return AVERROR(ENOMEM);
             list->elem = newelem;
@@ -1325,7 +1331,7 @@ static int ebml_parse(MatroskaDemuxContext *matroska,
             // current element (i.e. how much would be skipped); if there were
             // more than a few skipped elements in a row and skipping the current
             // element would lead us more than SKIP_THRESHOLD away from the last
-            // known good position, then it is inferred that an error occured.
+            // known good position, then it is inferred that an error occurred.
             // The dependency on the number of unknown elements in a row exists
             // because the distance to the last known good position is
             // automatically big if the last parsed element was big.
@@ -1490,6 +1496,7 @@ static void ebml_free(EbmlSyntax *syntax, void *data)
                     ebml_free(syntax[i].def.n, ptr);
                 av_freep(&list->elem);
                 list->nb_elem = 0;
+                list->alloc_elem_size = 0;
             } else
                 ebml_free(syntax[i].def.n, data_off);
         default:
@@ -3269,20 +3276,17 @@ fail:
 static int matroska_parse_prores(MatroskaTrack *track, uint8_t *src,
                                  uint8_t **pdst, int *size)
 {
-    uint8_t *dst = src;
-    int dstlen = *size;
+    uint8_t *dst;
+    int dstlen = *size + 8;
 
-    if (AV_RB32(&src[4]) != MKBETAG('i', 'c', 'p', 'f')) {
-        dst = av_malloc(dstlen + 8 + AV_INPUT_BUFFER_PADDING_SIZE);
+        dst = av_malloc(dstlen + AV_INPUT_BUFFER_PADDING_SIZE);
         if (!dst)
             return AVERROR(ENOMEM);
 
         AV_WB32(dst, dstlen);
         AV_WB32(dst + 4, MKBETAG('i', 'c', 'p', 'f'));
-        memcpy(dst + 8, src, dstlen);
-        memset(dst + 8 + dstlen, 0, AV_INPUT_BUFFER_PADDING_SIZE);
-        dstlen += 8;
-    }
+        memcpy(dst + 8, src, dstlen - 8);
+        memset(dst + dstlen, 0, AV_INPUT_BUFFER_PADDING_SIZE);
 
     *pdst = dst;
     *size = dstlen;
@@ -3437,7 +3441,8 @@ static int matroska_parse_frame(MatroskaDemuxContext *matroska,
         pkt_data = wv_data;
     }
 
-    if (st->codecpar->codec_id == AV_CODEC_ID_PRORES) {
+    if (st->codecpar->codec_id == AV_CODEC_ID_PRORES &&
+        AV_RB32(pkt_data + 4)  != MKBETAG('i', 'c', 'p', 'f')) {
         uint8_t *pr_data;
         res = matroska_parse_prores(track, pkt_data, &pr_data, &pkt_size);
         if (res < 0) {
