@@ -1686,6 +1686,7 @@ static struct fragment *get_current_fragment(struct representation *pls)
             return seg;
         } else if (c->is_live) {
             refresh_manifest(pls->parent);
+
         } else {
             break;
         }
@@ -2368,6 +2369,7 @@ static int dash_read_packet(AVFormatContext *s, AVPacket *pkt)
     if (!cur) {
         return AVERROR_INVALIDDATA;
     }
+
     while (!ff_check_interrupt(c->interrupt_callback) && !ret) {
         ret = av_read_frame(cur->ctx, pkt);
         if (ret >= 0) {
@@ -2385,6 +2387,24 @@ static int dash_read_packet(AVFormatContext *s, AVPacket *pkt)
             cur->is_restart_needed = 0;
         }
     }
+
+    AVDictionary* metadata_dict = NULL;
+    av_dict_set_int(&metadata_dict, "segNumber", cur->cur_seq_no);
+    av_dict_set_int(&metadata_dict, "segSize", cur->cur_seg_size);
+    av_dict_set_int(&metadata_dict, "fragTimescale", cur->fragment_timescale);
+
+    if (cur->n_timelines) {
+        av_dict_set_int(&metadata_dict, "fragDuration", cur->timelines[0]->duration);
+    }
+    else {
+        av_dict_set_int(&metadata_dict, "fragDuration", cur->fragment_duration);
+    }
+
+    int metadata_dict_size = 0;
+    uint8_t* metadata_dict_packed = av_packet_pack_dictionary(metadata_dict, &metadata_dict_size);
+    av_dict_free(&metadata_dict);
+    av_packet_add_side_data(pkt, AV_PKT_DATA_STRINGS_METADATA, metadata_dict_packed, metadata_dict_size);
+
     return AVERROR_EOF;
 }
 
