@@ -2327,7 +2327,10 @@ static void recheck_discard_flags(AVFormatContext *s, struct representation **p,
 
 static int dash_read_packet(AVFormatContext *s, AVPacket *pkt)
 {
+    AVDictionary* metadata_dict = NULL;
+    uint8_t* metadata_dict_packed = NULL;
     DASHContext *c = s->priv_data;
+    int metadata_dict_size = 0;
     int ret = 0, i;
     int64_t mints = 0;
     struct representation *cur = NULL;
@@ -2388,20 +2391,18 @@ static int dash_read_packet(AVFormatContext *s, AVPacket *pkt)
         }
     }
 
-    AVDictionary* metadata_dict = NULL;
-    av_dict_set_int(&metadata_dict, "segNumber", cur->cur_seq_no);
-    av_dict_set_int(&metadata_dict, "segSize", cur->cur_seg_size);
-    av_dict_set_int(&metadata_dict, "fragTimescale", cur->fragment_timescale);
+    av_dict_set_int(&metadata_dict, "segNumber", cur->cur_seq_no, 0);
+    av_dict_set_int(&metadata_dict, "segSize", cur->cur_seg_size, 0);
+    av_dict_set_int(&metadata_dict, "fragTimescale", cur->fragment_timescale, 0);
 
     if (cur->n_timelines) {
-        av_dict_set_int(&metadata_dict, "fragDuration", cur->timelines[0]->duration);
+        av_dict_set_int(&metadata_dict, "fragDuration", cur->timelines[0]->duration, 0);
     }
     else {
-        av_dict_set_int(&metadata_dict, "fragDuration", cur->fragment_duration);
+        av_dict_set_int(&metadata_dict, "fragDuration", cur->fragment_duration, 0);
     }
 
-    int metadata_dict_size = 0;
-    uint8_t* metadata_dict_packed = av_packet_pack_dictionary(metadata_dict, &metadata_dict_size);
+    metadata_dict_packed = av_packet_pack_dictionary(metadata_dict, &metadata_dict_size);
     av_dict_free(&metadata_dict);
     av_packet_add_side_data(pkt, AV_PKT_DATA_STRINGS_METADATA, metadata_dict_packed, metadata_dict_size);
 
