@@ -1686,7 +1686,6 @@ static struct fragment *get_current_fragment(struct representation *pls)
             return seg;
         } else if (c->is_live) {
             refresh_manifest(pls->parent);
-
         } else {
             break;
         }
@@ -2381,7 +2380,9 @@ static int dash_read_packet(AVFormatContext *s, AVPacket *pkt)
             pkt->stream_index = cur->stream_index;
 
             av_dict_set_int(&metadata_dict, "segNumber", cur->cur_seq_no, 0);
-            av_dict_set_int(&metadata_dict, "segSize", cur->cur_seg_size, 0);
+            if (NULL != cur->cur_seg) {
+                av_dict_set_int(&metadata_dict, "segSize", cur->cur_seg->size, 0);
+            }
             av_dict_set_int(&metadata_dict, "fragTimescale", cur->fragment_timescale, 0);
 
             if (cur->n_timelines) {
