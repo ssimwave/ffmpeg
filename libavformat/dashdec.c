@@ -2379,6 +2379,22 @@ static int dash_read_packet(AVFormatContext *s, AVPacket *pkt)
             /* If we got a packet, return it */
             cur->cur_timestamp = av_rescale(pkt->pts, (int64_t)cur->ctx->streams[0]->time_base.num * 90000, cur->ctx->streams[0]->time_base.den);
             pkt->stream_index = cur->stream_index;
+
+            av_dict_set_int(&metadata_dict, "segNumber", cur->cur_seq_no, 0);
+            av_dict_set_int(&metadata_dict, "segSize", cur->cur_seg_size, 0);
+            av_dict_set_int(&metadata_dict, "fragTimescale", cur->fragment_timescale, 0);
+
+            if (cur->n_timelines) {
+                av_dict_set_int(&metadata_dict, "fragDuration", cur->timelines[0]->duration, 0);
+            }
+            else {
+                av_dict_set_int(&metadata_dict, "fragDuration", cur->fragment_duration, 0);
+            }
+
+            metadata_dict_packed = av_packet_pack_dictionary(metadata_dict, &metadata_dict_size);
+            av_dict_free(&metadata_dict);
+            av_packet_add_side_data(pkt, AV_PKT_DATA_STRINGS_METADATA, metadata_dict_packed, metadata_dict_size);
+
             return 0;
         }
         if (cur->is_restart_needed) {
@@ -2390,21 +2406,6 @@ static int dash_read_packet(AVFormatContext *s, AVPacket *pkt)
             cur->is_restart_needed = 0;
         }
     }
-
-    av_dict_set_int(&metadata_dict, "segNumber", cur->cur_seq_no, 0);
-    av_dict_set_int(&metadata_dict, "segSize", cur->cur_seg_size, 0);
-    av_dict_set_int(&metadata_dict, "fragTimescale", cur->fragment_timescale, 0);
-
-    if (cur->n_timelines) {
-        av_dict_set_int(&metadata_dict, "fragDuration", cur->timelines[0]->duration, 0);
-    }
-    else {
-        av_dict_set_int(&metadata_dict, "fragDuration", cur->fragment_duration, 0);
-    }
-
-    metadata_dict_packed = av_packet_pack_dictionary(metadata_dict, &metadata_dict_size);
-    av_dict_free(&metadata_dict);
-    av_packet_add_side_data(pkt, AV_PKT_DATA_STRINGS_METADATA, metadata_dict_packed, metadata_dict_size);
 
     return AVERROR_EOF;
 }
