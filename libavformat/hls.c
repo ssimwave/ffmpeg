@@ -2295,6 +2295,7 @@ static int hls_read_packet(AVFormatContext *s, AVPacket *pkt)
         /* Playlist metadata */
         av_dict_set_int(&metadata_dict, "targetDuration", pls->target_duration, 0);
         av_dict_set_int(&metadata_dict, "playlistType", pls->type, 0);
+        av_dict_set_int(&metadata_dict, "variants", c->n_variants, 0);
         av_dict_set_int(&metadata_dict, "bandwidth", c->variants[pls->index]->bandwidth, 0);
 
         /* Segment metadata */
