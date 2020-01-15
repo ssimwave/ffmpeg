@@ -188,7 +188,7 @@ static int vorbis_parse_init(AVVorbisParseContext *s,
     int header_len[3];
     int ret;
 
-    s->class = &vorbis_parser_class;
+    s->avclass = &vorbis_parser_class;
     s->extradata_parsed = 1;
 
     if ((ret = avpriv_split_xiph_headers(extradata,

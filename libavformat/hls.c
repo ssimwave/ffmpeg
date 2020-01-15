@@ -2171,6 +2171,10 @@ static int hls_read_packet(AVFormatContext *s, AVPacket *pkt)
 {
     HLSContext *c = s->priv_data;
     int ret, i, minplaylist = -1;
+    AVDictionary* metadata_dict = NULL;
+    uint8_t* metadata_dict_packed = NULL;
+    int metadata_dict_size = 0;
+    int relative_seq_no = 0;
 
     recheck_discard_flags(s, c->first_packet);
     c->first_packet = 0;
@@ -2287,6 +2291,28 @@ static int hls_read_packet(AVFormatContext *s, AVPacket *pkt)
 
         *pkt = pls->pkt;
         pkt->stream_index = st->index;
+
+        /* Playlist metadata */
+        av_dict_set_int(&metadata_dict, "targetDuration", pls->target_duration, 0);
+        av_dict_set_int(&metadata_dict, "playlistType", pls->type, 0);
+        av_dict_set_int(&metadata_dict, "variants", c->n_variants, 0);
+        if (pls->index < c->n_variants) {
+            av_dict_set_int(&metadata_dict, "bandwidth", c->variants[pls->index]->bandwidth, 0);
+        }
+
+        /* Segment metadata */
+        av_dict_set_int(&metadata_dict, "segNumber", pls->cur_seq_no, 0);
+        relative_seq_no = pls->cur_seq_no - pls->start_seq_no;
+        if (relative_seq_no < pls->n_segments) {
+            av_dict_set_int(&metadata_dict, "segSize", pls->segments[relative_seq_no]->actual_size, 0);
+            av_dict_set_int(&metadata_dict, "segDuration", pls->segments[relative_seq_no]->duration, 0);
+            av_dict_set_int(&metadata_dict, "encryptionType", pls->segments[relative_seq_no]->key_type, 0);
+        }
+
+        metadata_dict_packed = av_packet_pack_dictionary(metadata_dict, &metadata_dict_size);
+        av_dict_free(&metadata_dict);
+        av_packet_add_side_data(pkt, AV_PKT_DATA_STRINGS_METADATA, metadata_dict_packed, metadata_dict_size);
+
         reset_packet(&c->playlists[minplaylist]->pkt);
 
         if (pkt->dts != AV_NOPTS_VALUE)
