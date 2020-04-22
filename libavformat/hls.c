@@ -231,7 +231,7 @@ static int is_variant_selected(HLSContext* c, const char* current_bandwidth) {
         return 1;
     }
     else if (c->selected_variant_index != -1 && *c->selected_bandwidth &&
-             !current_bandwidth) {
+             !*current_bandwidth) {
         if (c->variant_count++ == c->selected_variant_index &&
             (strcmp(c->selected_bandwidth, current_bandwidth) == 0)) {
             return 1;
