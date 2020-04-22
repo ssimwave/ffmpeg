@@ -238,7 +238,7 @@ static int is_variant_selected(HLSContext* c, const char* current_bandwidth) {
             return 0;
         }
     }
-    else if (c->selected_bandwdth && (strcmp(c->selected_bandwidth, "") != 0)) {
+    else if (c->selected_bandwidth && (strcmp(c->selected_bandwidth, "") != 0)) {
         // Current bandwidth is null
         if (!current_bandwidth) {
             return 0;
