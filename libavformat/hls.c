@@ -227,7 +227,7 @@ typedef struct HLSContext {
 } HLSContext;
 
 static int is_variant_selected(HLSContext* c, const char* current_bandwidth) {
-    if ((strcmp(c->selected_bandwidth, "") == 0) && c->selected_variant_index == -1) {
+    if (c->selected_bandwidth && (strcmp(c->selected_bandwidth, "") == 0) && c->selected_variant_index == -1) {
         return 1;
     }
     else if (c->selected_variant_index != -1) {
