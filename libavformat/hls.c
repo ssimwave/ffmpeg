@@ -227,18 +227,11 @@ typedef struct HLSContext {
 } HLSContext;
 
 static int is_variant_selected(HLSContext* c, const char* current_bandwidth) {
-    if (!c->selected_bandwidth && c->selected_variant_index == -1) {
+    // Default case where no bandwidth or index is selected
+    if (c->selected_bandwidth && (strcmp(c->selected_bandwidth, "") == 0) && c->selected_variant_index == -1) {
         return 1;
     }
-    else if (c->selected_variant_index != -1 && c->selected_bandwidth &&
-             !current_bandwidth) {
-        if (c->variant_count++ == c->selected_variant_index &&
-            (strcmp(c->selected_bandwidth, current_bandwidth) == 0)) {
-            return 1;
-        } else {
-            return 0;
-        }
-    }
+    // Case where index is selected
     else if (c->selected_variant_index != -1) {
         if (c->variant_count++ == c->selected_variant_index) {
             return 1;
@@ -247,14 +240,9 @@ static int is_variant_selected(HLSContext* c, const char* current_bandwidth) {
             return 0;
         }
     }
-    else if (c->selected_bandwidth) {
-        // This variant doesn't list a bandwidth
-        if (!current_bandwidth) {
-            return 0;
-        }
-        else {
-            return (strcmp(c->selected_bandwidth, current_bandwidth) == 0);
-        }
+    // Case where bandwidth is selected
+    else if (current_bandwidth && c->selected_bandwidth && (strcmp(c->selected_bandwidth, "") != 0)) {
+        return (strcmp(c->selected_bandwidth, current_bandwidth) == 0);
     }
 
     // If we've gotten here this must mean that we've selected a variant but
