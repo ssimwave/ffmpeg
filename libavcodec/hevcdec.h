@@ -555,6 +555,10 @@ typedef struct HEVCContext {
     int enable_parallel_tiles;
     atomic_int wpp_err;
 
+    /* Allow tiles and WPP to be disabled.  Enabled by default */
+    int allow_parallel_tiles;
+    int allow_parallel_wpp;
+
     const uint8_t *data;
 
     H2645Packet pkt;
@@ -672,7 +676,7 @@ void ff_hevc_luma_mv_mvp_mode(HEVCContext *s, int x0, int y0,
 void ff_hevc_set_qPy(HEVCContext *s, int xBase, int yBase,
                      int log2_cb_size);
 void ff_hevc_deblocking_boundary_strengths(HEVCContext *s, int x0, int y0,
-                                           int log2_trafo_size);
+                                           int log2_trafo_size, int do_internal);
 int ff_hevc_cu_qp_delta_sign_flag(HEVCContext *s);
 int ff_hevc_cu_qp_delta_abs(HEVCContext *s);
 int ff_hevc_cu_chroma_qp_offset_flag(HEVCContext *s);

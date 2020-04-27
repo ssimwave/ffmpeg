@@ -30,6 +30,15 @@
 static av_always_inline void FUNC(intra_pred)(HEVCContext *s, int x0, int y0,
                                               int log2_size, int c_idx)
 {
+#define IS_AVAIL(x,y) \
+    ( \
+      (y >= size && x == -1) ? cand_bottom_left : \
+      (y >= 0 && x == -1) ? cand_left : \
+      (y == -1 && x == -1) ? cand_up_left : \
+      (y == -1 && x >= size) ? cand_up_right : \
+      (y == -1 && x >= 0) ? cand_up : \
+      1 \
+    )
 #define PU(x) \
     ((x) >> s->ps.sps->log2_min_pu_size)
 #define MVF(x, y) \
@@ -38,6 +47,8 @@ static av_always_inline void FUNC(intra_pred)(HEVCContext *s, int x0, int y0,
     MVF(PU(x0 + ((x) * (1 << hshift))), PU(y0 + ((y) * (1 << vshift))))
 #define IS_INTRA(x, y) \
     (MVF_PU(x, y).pred_flag == PF_INTRA)
+#define IS_AVAIL_AND_INTRA(x, y) \
+    (IS_AVAIL(x,y) && IS_INTRA(x,y))
 #define MIN_TB_ADDR_ZS(x, y) \
     s->ps.pps->min_tb_addr_zs[(y) * (s->ps.sps->tb_mask+2) + (x)]
 #define EXTEND(ptr, val, len)         \
@@ -49,23 +60,23 @@ do {                                  \
 
 #define EXTEND_RIGHT_CIP(ptr, start, length)                                   \
         for (i = start; i < (start) + (length); i += 4)                        \
-            if (!IS_INTRA(i, -1))                                              \
+            if (!IS_AVAIL_AND_INTRA(i, -1))                                              \
                 AV_WN4P(&ptr[i], a);                                           \
             else                                                               \
                 a = PIXEL_SPLAT_X4(ptr[i+3])
 #define EXTEND_LEFT_CIP(ptr, start, length) \
         for (i = start; i > (start) - (length); i--) \
-            if (!IS_INTRA(i - 1, -1)) \
+            if (!IS_AVAIL_AND_INTRA(i - 1, -1)) \
                 ptr[i - 1] = ptr[i]
 #define EXTEND_UP_CIP(ptr, start, length)                                      \
         for (i = (start); i > (start) - (length); i -= 4)                      \
-            if (!IS_INTRA(-1, i - 3))                                          \
+            if (!IS_AVAIL_AND_INTRA(-1, i - 3))                                          \
                 AV_WN4P(&ptr[i - 3], a);                                       \
             else                                                               \
                 a = PIXEL_SPLAT_X4(ptr[i - 3])
 #define EXTEND_DOWN_CIP(ptr, start, length)                                    \
         for (i = start; i < (start) + (length); i += 4)                        \
-            if (!IS_INTRA(-1, i))                                              \
+            if (!IS_AVAIL_AND_INTRA(-1, i))                                              \
                 AV_WN4P(&ptr[i], a);                                           \
             else                                                               \
                 a = PIXEL_SPLAT_X4(ptr[i + 3])
@@ -200,18 +211,18 @@ do {                                  \
                                                      size : (s->ps.sps->height - y0) >> vshift;
             }
             if (cand_bottom_left || cand_left || cand_up_left) {
-                while (j > -1 && !IS_INTRA(-1, j))
+                while (j > -1 && !IS_AVAIL_AND_INTRA(-1, j))
                     j--;
-                if (!IS_INTRA(-1, j)) {
+                if (!IS_AVAIL_AND_INTRA(-1, j)) {
                     j = 0;
-                    while (j < size_max_x && !IS_INTRA(j, -1))
+                    while (j < size_max_x && !IS_AVAIL_AND_INTRA(j, -1))
                         j++;
                     EXTEND_LEFT_CIP(top, j, j + 1);
                     left[-1] = top[-1];
                 }
             } else {
                 j = 0;
-                while (j < size_max_x && !IS_INTRA(j, -1))
+                while (j < size_max_x && !IS_AVAIL_AND_INTRA(j, -1))
                     j++;
                 if (j > 0)
                     if (x0 > 0) {
@@ -234,7 +245,7 @@ do {                                  \
             if (x0 != 0 && y0 != 0) {
                 a = PIXEL_SPLAT_X4(left[size_max_y - 1]);
                 EXTEND_UP_CIP(left, size_max_y - 1, size_max_y);
-                if (!IS_INTRA(-1, - 1))
+                if (!IS_AVAIL_AND_INTRA(-1, - 1))
                     left[-1] = left[0];
             } else if (x0 == 0) {
                 EXTEND(left, 0, size_max_y);
@@ -543,6 +554,8 @@ static void FUNC(pred_angular_3)(uint8_t *src, const uint8_t *top,
 #undef EXTEND_RIGHT_CIP
 #undef EXTEND_UP_CIP
 #undef EXTEND_DOWN_CIP
+#undef IS_AVAIL_AND_INTRA
+#undef IS_AVAIL
 #undef IS_INTRA
 #undef MVF_PU
 #undef MVF
