@@ -710,7 +710,7 @@ static int boundary_strength(HEVCContext *s, MvField *curr, MvField *neigh,
 }
 
 void ff_hevc_deblocking_boundary_strengths(HEVCContext *s, int x0, int y0,
-                                           int log2_trafo_size)
+                                           int log2_trafo_size, int do_internal)
 {
     HEVCLocalContext *lc = s->HEVClc;
     MvField *tab_mvf     = s->ref->tab_mvf;
@@ -743,6 +743,9 @@ void ff_hevc_deblocking_boundary_strengths(HEVCContext *s, int x0, int y0,
         int yq_tu =  y0      >> log2_min_tu_size;
 
             for (i = 0; i < (1 << log2_trafo_size); i += 4) {
+                if (x0 + i + 4 > s->ps.sps->width) {
+                    continue;
+                }
                 int x_pu = (x0 + i) >> log2_min_pu_size;
                 int x_tu = (x0 + i) >> log2_min_tu_size;
                 MvField *top  = &tab_mvf[yp_pu * min_pu_width + x_pu];
@@ -781,6 +784,9 @@ void ff_hevc_deblocking_boundary_strengths(HEVCContext *s, int x0, int y0,
         int xq_tu =  x0      >> log2_min_tu_size;
 
             for (i = 0; i < (1 << log2_trafo_size); i += 4) {
+                if (y0 + i + 4 > s->ps.sps->height) {
+                    continue;
+                }
                 int y_pu      = (y0 + i) >> log2_min_pu_size;
                 int y_tu      = (y0 + i) >> log2_min_tu_size;
                 MvField *left = &tab_mvf[y_pu * min_pu_width + xp_pu];
@@ -798,7 +804,7 @@ void ff_hevc_deblocking_boundary_strengths(HEVCContext *s, int x0, int y0,
             }
     }
 
-    if (log2_trafo_size > log2_min_pu_size && !is_intra) {
+    if (log2_trafo_size > log2_min_pu_size && !is_intra && do_internal) {
         RefPicList *rpl = s->ref->refPicList;
 
         // bs for TU internal horizontal PU boundaries
