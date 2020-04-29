@@ -1448,13 +1448,13 @@ static int read_data(void *opaque, uint8_t *buf, int buf_size)
     int just_opened = 0;
     int reload_count = 0;
     struct segment *seg;
-    struct AVIOInternal* interal = NULL;
+    struct AVIOInternal* avio_internal = NULL;
     URLContext* urlc = NULL;
 
     // keep reference of mpegts parser callback mechanism
     if(v->input && (!c->http_persistent || !v->input_read_done)) {
-        interal = (struct AVIOInternal*)v->input->opaque;
-        urlc = (URLContext*)interal->h;
+        avio_internal = (struct AVIOInternal*)v->input->opaque;
+        urlc = (URLContext*)avio_internal->h;
         struct segment *seg = current_segment(v);
         // Get actual segment size 
         if (seg->actual_size == -1) {
@@ -1508,7 +1508,7 @@ reload:
                    v->start_seq_no - v->cur_seq_no);
             v->cur_seq_no = v->start_seq_no;
         }
-        if (v->cur_seq_no >= v->start_seq_no + v->n_segments) {
+        if (v->cur_seq_no >= (v->start_seq_no + v->n_segments - 1)) {
             if (v->finished)
                 return AVERROR_EOF;
             while (av_gettime_relative() - v->last_load_time < reload_interval) {
@@ -1589,10 +1589,10 @@ reload:
         }
 
         // replace mpegts parser callback mechanism
-        if (interal && urlc && v->input && (!c->http_persistent || !v->input_read_done) &&
+        if (avio_internal && urlc && v->input && (!c->http_persistent || !v->input_read_done) &&
             (v->mpegts_parser_input_backup != 0)) {
-            interal = (struct AVIOInternal*)v->input->opaque;
-            urlc = (URLContext*)interal->h;
+            avio_internal = (struct AVIOInternal*)v->input->opaque;
+            urlc = (URLContext*)avio_internal->h;
             urlc->mpegts_parser_injection = v->mpegts_parser_input_backup;
             urlc->mpegts_parser_injection_context = v->mpegts_parser_input_context_backup;
         }
