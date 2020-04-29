@@ -471,6 +471,10 @@ typedef struct HEVCContext {
     int enable_parallel_tiles;
     atomic_int wpp_err;
 
+    /* Allow tiles and WPP to be disabled.  Enabled by default */
+    int allow_parallel_tiles;
+    int allow_parallel_wpp;
+
     const uint8_t *data;
 
     H2645Packet pkt;

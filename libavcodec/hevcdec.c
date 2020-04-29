@@ -869,10 +869,18 @@ static int hls_slice_header(HEVCContext *s)
                 unsigned val = get_bits_long(gb, offset_len);
                 sh->entry_point_offset[i] = val + 1; // +1; // +1 to get the size
             }
-            if (s->threads_number > 1 && (s->ps.pps->num_tile_rows > 1 || s->ps.pps->num_tile_columns > 1)) {
+            if (s->threads_number > 1 && (s->ps.pps->num_tile_rows > 1 || s->ps.pps->num_tile_columns > 1) && s->allow_parallel_tiles) {
+                /* decode tiles in parallel */
                 s->enable_parallel_tiles = 1;
-            } else
+            } else if (s->threads_number > 1 && s->allow_parallel_wpp) {
+                /* decode wpp in parallel */
                 s->enable_parallel_tiles = 0;
+            }
+            else {
+                /* decode single-threaded */
+                s->enable_parallel_tiles = 0;
+                s->threads_number = 1;
+            }
         } else
             s->enable_parallel_tiles = 0;
     }
@@ -3711,6 +3719,8 @@ static av_cold int hevc_decode_init(AVCodecContext *avctx)
         return ret;
 
     s->enable_parallel_tiles = 0;
+    s->allow_parallel_tiles = 1;
+    s->allow_parallel_wpp = 1;
     s->sei.picture_timing.picture_struct = 0;
     s->eos = 1;
 
