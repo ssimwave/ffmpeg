@@ -1508,7 +1508,7 @@ reload:
                    v->start_seq_no - v->cur_seq_no);
             v->cur_seq_no = v->start_seq_no;
         }
-        if (v->cur_seq_no >= (v->start_seq_no + v->n_segments - 1)) {
+        if (v->cur_seq_no >= (v->start_seq_no + v->n_segments)) {
             if (v->finished)
                 return AVERROR_EOF;
             while (av_gettime_relative() - v->last_load_time < reload_interval) {
