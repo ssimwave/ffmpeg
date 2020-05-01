@@ -1506,8 +1506,10 @@ reload:
             av_log(v->parent, AV_LOG_WARNING,
                    "skipping %d segments ahead, expired from playlists\n",
                    v->start_seq_no - v->cur_seq_no);
+            printf("Setting seq_no to %d from %d\n", v->start_seq_no, v->cur_seq_no);
             v->cur_seq_no = v->start_seq_no;
         }
+        printf("Cur seq_no %d start %d seg %d\n", v->cur_seq_no, v->start_seq_no, v->n_segments);
         if (v->cur_seq_no >= (v->start_seq_no + v->n_segments)) {
             if (v->finished)
                 return AVERROR_EOF;
@@ -1541,6 +1543,7 @@ reload:
             av_log(v->parent, AV_LOG_WARNING, "Failed to open segment %d of playlist %d\n",
                    v->cur_seq_no,
                    v->index);
+            printf("Increment Cur seq_no %d\n", v->cur_seq_no);
             v->cur_seq_no += 1;
             goto reload;
         }
@@ -1605,6 +1608,7 @@ reload:
     } else {
         ff_format_io_close(v->parent, &v->input);
     }
+    printf("End of read_data cur seq_no %d\n", v->cur_seq_no);
     v->cur_seq_no++;
 
     c->cur_seq_no = v->cur_seq_no;
