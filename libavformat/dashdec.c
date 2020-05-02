@@ -30,6 +30,8 @@
 
 #define INITIAL_BUFFER_SIZE 32768
 #define MAX_FIELD_LEN 64
+#define MAX_MANIFEST_SIZE 50 * 1024
+#define DEFAULT_MANIFEST_SIZE 8 * 1024
 
 struct fragment {
     int64_t url_offset;
@@ -137,14 +139,14 @@ struct representation {
     int fix_multiple_stsd_order;
     /**
      *  record the sequence number of the first segment
-     *  in current timeline. 
-     *  Since the problem mpd availabilityStartTime is UTC epoch 
+     *  in current timeline.
+     *  Since the problem mpd availabilityStartTime is UTC epoch
      *  starting time, the cur_seq_no is already big number
-     *  get_fragment_start_time use local counter to compare 
-     *  with cur_seq_no which then blow up the result, it always 
+     *  get_fragment_start_time use local counter to compare
+     *  with cur_seq_no which then blow up the result, it always
      *  return the last segment timestamp in the timeline.
      *  Use this temporary variable to track the first seq_no.
-     */ 
+     */
 
     int64_t first_seq_no_in_representation;
 
@@ -1275,7 +1277,7 @@ static int parse_manifest(AVFormatContext *s, const char *url, AVIOContext *in)
     int close_in = 0;
     uint8_t *new_url = NULL;
     int64_t filesize = 0;
-    char *buffer = NULL;
+    AVBPrint buf;
     AVDictionary *opts = NULL;
     xmlDoc *doc = NULL;
     xmlNodePtr root_element = NULL;
@@ -1309,24 +1311,23 @@ static int parse_manifest(AVFormatContext *s, const char *url, AVIOContext *in)
     }
 
     filesize = avio_size(in);
-    if (filesize <= 0) {
-        filesize = 8 * 1024;
+    if (filesize > MAX_MANIFEST_SIZE) {
+        av_log(s, AV_LOG_ERROR, "Manifest too large: %"PRId64"\n", filesize);
+        return AVERROR_INVALIDDATA;
     }
 
-    buffer = av_mallocz(filesize);
-    if (!buffer) {
-        av_free(c->base_url);
-        return AVERROR(ENOMEM);
-    }
+    av_bprint_init(&buf, (filesize > 0) ? filesize + 1 : DEFAULT_MANIFEST_SIZE, AV_BPRINT_SIZE_UNLIMITED);
 
-    filesize = avio_read(in, buffer, filesize);
-    if (filesize <= 0) {
-        av_log(s, AV_LOG_ERROR, "Unable to read to offset '%s'\n", url);
-        ret = AVERROR_INVALIDDATA;
+    if ((ret = avio_read_to_bprint(in, &buf, MAX_MANIFEST_SIZE)) < 0 ||
+        !avio_feof(in) ||
+        (filesize = buf.len) == 0) {
+        av_log(s, AV_LOG_ERROR, "Unable to read to manifest '%s'\n", url);
+        if (ret == 0)
+            ret = AVERROR_INVALIDDATA;
     } else {
         LIBXML_TEST_VERSION
 
-            doc = xmlReadMemory(buffer, filesize, c->base_url, NULL, 0);
+        doc = xmlReadMemory(buf.str, filesize, c->base_url, NULL, 0);
         root_element = xmlDocGetRootElement(doc);
         node = root_element;
 
@@ -1451,7 +1452,7 @@ cleanup:
     }
 
     av_free(new_url);
-    av_free(buffer);
+    av_bprint_finalize(&buf, NULL);
     if (close_in) {
         avio_close(in);
     }
@@ -1543,9 +1544,9 @@ static void move_timelines(struct representation *rep_src, struct representation
         rep_dest->timelines    = rep_src->timelines;
         rep_dest->n_timelines  = rep_src->n_timelines;
         rep_dest->first_seq_no = rep_src->first_seq_no;
-        
+
         rep_dest->last_seq_no = calc_max_seg_no(rep_dest, c);
-        
+
         rep_src->timelines = NULL;
         rep_src->n_timelines = 0;
         rep_dest->cur_seq_no = rep_src->cur_seq_no;
@@ -2550,7 +2551,7 @@ static const AVOption dash_options[] = {
 
     // Updated Patch Method Options.
     { "live_start_index", "segment index to start live streams at (negative values are from the end)", OFFSET(live_start_index), AV_OPT_TYPE_INT, {.i64 = 0}, INT_MIN, INT_MAX, FLAGS},
-  
+
     {NULL}
 };
 
