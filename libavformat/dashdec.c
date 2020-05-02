@@ -36,6 +36,8 @@
 //#define SSIMWAVE_FRAGMENT_SELECT 1
 //#define SSIMWAVE_SEG_GET_LENGTH 1
 
+#define MAX_MANIFEST_SIZE 50 * 1024
+#define DEFAULT_MANIFEST_SIZE 8 * 1024
 
 struct fragment {
     int64_t url_offset;
@@ -1275,7 +1277,7 @@ static int parse_manifest(AVFormatContext *s, const char *url, AVIOContext *in)
     int close_in = 0;
     uint8_t *new_url = NULL;
     int64_t filesize = 0;
-    char *buffer = NULL;
+    AVBPrint buf;
     AVDictionary *opts = NULL;
     xmlDoc *doc = NULL;
     xmlNodePtr root_element = NULL;
@@ -1309,24 +1311,23 @@ static int parse_manifest(AVFormatContext *s, const char *url, AVIOContext *in)
     }
 
     filesize = avio_size(in);
-    if (filesize <= 0) {
-        filesize = 8 * 1024;
+    if (filesize > MAX_MANIFEST_SIZE) {
+        av_log(s, AV_LOG_ERROR, "Manifest too large: %"PRId64"\n", filesize);
+        return AVERROR_INVALIDDATA;
     }
 
-    buffer = av_mallocz(filesize);
-    if (!buffer) {
-        av_free(c->base_url);
-        return AVERROR(ENOMEM);
-    }
+    av_bprint_init(&buf, (filesize > 0) ? filesize + 1 : DEFAULT_MANIFEST_SIZE, AV_BPRINT_SIZE_UNLIMITED);
 
-    filesize = avio_read(in, buffer, filesize);
-    if (filesize <= 0) {
-        av_log(s, AV_LOG_ERROR, "Unable to read to offset '%s'\n", url);
-        ret = AVERROR_INVALIDDATA;
+    if ((ret = avio_read_to_bprint(in, &buf, MAX_MANIFEST_SIZE)) < 0 ||
+        !avio_feof(in) ||
+        (filesize = buf.len) == 0) {
+        av_log(s, AV_LOG_ERROR, "Unable to read to manifest '%s'\n", url);
+        if (ret == 0)
+            ret = AVERROR_INVALIDDATA;
     } else {
         LIBXML_TEST_VERSION
 
-            doc = xmlReadMemory(buffer, filesize, c->base_url, NULL, 0);
+        doc = xmlReadMemory(buf.str, filesize, c->base_url, NULL, 0);
         root_element = xmlDocGetRootElement(doc);
         node = root_element;
 
@@ -1451,7 +1452,7 @@ cleanup:
     }
 
     av_free(new_url);
-    av_free(buffer);
+    av_bprint_finalize(&buf, NULL);
     if (close_in) {
         avio_close(in);
     }
@@ -1629,9 +1630,9 @@ static int refresh_manifest(AVFormatContext *s)
             if (first_seq_no_offset) {
                 int curr_offset_seq_no = cur_video->cur_seq_no - cur_video->first_seq_no;
                 int64_t curr_time = get_segment_start_time_based_on_timeline(cur_video, curr_offset_seq_no) / cur_video->fragment_timescale;
-                av_log(c, 0, "refresh manifest (video): cur seq no %d\n", curr_offset_seq_no);
+                //av_log(c, 0, "refresh manifest (video): cur seq no %d\n", curr_offset_seq_no);
                 ccur_video->cur_seq_no = ccur_video->first_seq_no + calc_next_seg_no_from_timelines(ccur_video, curr_time * cur_video->fragment_timescale - 1);
-                av_log(c, 0, "refresh manifest (video): new cur seq no %d\n", ccur_video->cur_seq_no);
+                //av_log(c, 0, "refresh manifest (video): new cur seq no %d\n", ccur_video->cur_seq_no);
             }
             else {
                 int64_t curr_time = get_segment_start_time_based_on_timeline(cur_video, cur_video->cur_seq_no) / cur_video->fragment_timescale;
@@ -1661,9 +1662,9 @@ static int refresh_manifest(AVFormatContext *s)
             if (first_seq_no_offset) {
                 int curr_offset_seq_no = cur_audio->cur_seq_no - cur_audio->first_seq_no;
                 int64_t curr_time = get_segment_start_time_based_on_timeline(cur_audio, curr_offset_seq_no) / cur_audio->fragment_timescale;
-                av_log(c, 0, "refresh manifest (audio): cur seq no %d\n", curr_offset_seq_no);
+                //av_log(c, 0, "refresh manifest (audio): cur seq no %d\n", curr_offset_seq_no);
                 ccur_audio->cur_seq_no = ccur_audio->first_seq_no + calc_next_seg_no_from_timelines(ccur_audio, curr_time * cur_audio->fragment_timescale - 1);
-                av_log(c, 0, "refresh manifest (audio): new cur seq no %d\n", ccur_audio->cur_seq_no);
+                //av_log(c, 0, "refresh manifest (audio): new cur seq no %d\n", ccur_audio->cur_seq_no);
             }
             else {
                 int64_t curr_time = get_segment_start_time_based_on_timeline(cur_audio, cur_audio->cur_seq_no) / cur_audio->fragment_timescale;
@@ -1814,7 +1815,17 @@ static struct fragment *get_current_fragment(struct representation *pls)
         if (!tmpfilename) {
             return NULL;
         }
+#ifdef SSIMWAVE_SEG_NO_START_ADJ
+        if (pls->cur_seq_no >= pls->first_seq_no) {
+            int curr_offset_seq_no = pls->cur_seq_no - pls->first_seq_no;
+            ff_dash_fill_tmpl_params(tmpfilename, c->max_url_size, pls->url_template, 0, pls->cur_seq_no, 0, get_segment_start_time_based_on_timeline(pls, curr_offset_seq_no));
+        }
+        else {
+            ff_dash_fill_tmpl_params(tmpfilename, c->max_url_size, pls->url_template, 0, pls->cur_seq_no, 0, get_segment_start_time_based_on_timeline(pls, pls->cur_seq_no));
+        }
+#else
         ff_dash_fill_tmpl_params(tmpfilename, c->max_url_size, pls->url_template, 0, pls->cur_seq_no, 0, get_segment_start_time_based_on_timeline(pls, pls->cur_seq_no));
+#endif
         seg->url = av_strireplace(pls->url_template, pls->url_template, tmpfilename);
         if (!seg->url) {
             av_log(pls->parent, AV_LOG_WARNING, "Unable to resolve template url '%s', try to use origin template\n", pls->url_template);
