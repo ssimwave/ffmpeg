@@ -2323,6 +2323,7 @@ static int hls_read_packet(AVFormatContext *s, AVPacket *pkt)
             av_log(c, AV_LOG_DEBUG, "Segment %ld (cur %d) pkt position %ld next_boundary %ld\n",
                     pls->reported_segment_number, pls->cur_seq_no, pkt->pos, pls->segment_boundary_position);
 
+            cur_seq_no = FFMIN(cur_seq_no, pls->start_seq_no + pls->n_segments - 1);
             av_dict_set_int(&metadata_dict, "segNumber", cur_seq_no, 0);
             relative_seq_no = cur_seq_no - pls->start_seq_no;
         }
