@@ -1471,8 +1471,8 @@ static int read_data(void *opaque, uint8_t *buf, int buf_size)
         struct segment *seg = current_segment(v);
         avio_internal = (struct AVIOInternal*)v->input->opaque;
         urlc = (URLContext*)avio_internal->h;
-        // Get actual segment size 
-	set_actual_segment_size(seg);
+        // Get actual segment size
+        set_actual_segment_size(seg);
         v->mpegts_parser_input_backup = urlc->mpegts_parser_injection;
         v->mpegts_parser_input_context_backup = urlc->mpegts_parser_injection_context;
     }
@@ -1525,7 +1525,6 @@ reload:
         if (v->cur_seq_no >= (v->start_seq_no + v->n_segments)) {
             if (v->finished)
                 return AVERROR_EOF;
-
             while (av_gettime_relative() - v->last_load_time < reload_interval) {
                 if (ff_check_interrupt(c->interrupt_callback))
                     return AVERROR_EXIT;
@@ -1556,7 +1555,7 @@ reload:
             av_log(v->parent, AV_LOG_WARNING, "Failed to open segment %d of playlist %d\n",
                    v->cur_seq_no,
                    v->index);
-	    v->cur_seq_no += 1;
+            v->cur_seq_no += 1;
             goto reload;
         }
         just_opened = 1;
@@ -1611,9 +1610,8 @@ reload:
             urlc->mpegts_parser_injection = v->mpegts_parser_input_backup;
             urlc->mpegts_parser_injection_context = v->mpegts_parser_input_context_backup;
         }
-	//
-        // Get actual segment size 
-	set_actual_segment_size(seg);
+        // Get actual segment size
+        set_actual_segment_size(seg);
 
         return ret;
     }
@@ -2043,7 +2041,7 @@ static int hls_read_header(AVFormatContext *s)
             goto fail;
 
         // Actual Segment Size
-	set_actual_segment_size(pls->segments[0]);
+        set_actual_segment_size(pls->segments[0]);
         pls->segment_boundary_position = pls->segments[0]->actual_size;
         pls->reported_segment_number = pls->start_seq_no;
 
@@ -2312,22 +2310,22 @@ static int hls_read_packet(AVFormatContext *s, AVPacket *pkt)
         }
 
         /* Segment metadata */
-	{
-	    int cur_seq_no = pls->cur_seq_no;
-	    /* If the playlist is VOD then let's cap it to the number of segments */
-	    if (pls->finished) {
-	        if (pkt->pos >= pls->segment_boundary_position) {
-                    pls->reported_segment_number++;
-	            pls->segment_boundary_position += pls->segments[pls->reported_segment_number]->actual_size;
-	        }
-	        cur_seq_no = pls->reported_segment_number;
-	    }
+        {
+            int cur_seq_no = pls->cur_seq_no;
+            /* If the playlist is VOD then let's cap it to the number of segments */
+            if (pls->finished) {
+                if (pkt->pos >= pls->segment_boundary_position) {
+                        pls->reported_segment_number++;
+                    pls->segment_boundary_position += pls->segments[pls->reported_segment_number]->actual_size;
+                }
+                cur_seq_no = pls->reported_segment_number;
+            }
             av_log(c, AV_LOG_DEBUG, "Segment %ld (cur %d) pkt position %ld next_boundary %ld\n",
-	    		pls->reported_segment_number, pls->cur_seq_no, pkt->pos, pls->segment_boundary_position);
+                    pls->reported_segment_number, pls->cur_seq_no, pkt->pos, pls->segment_boundary_position);
 
             av_dict_set_int(&metadata_dict, "segNumber", cur_seq_no, 0);
             relative_seq_no = cur_seq_no - pls->start_seq_no;
-	}
+        }
         if (relative_seq_no < pls->n_segments) {
             av_dict_set_int(&metadata_dict, "segSize", pls->segments[relative_seq_no]->actual_size, 0);
             av_dict_set_int(&metadata_dict, "segDuration", pls->segments[relative_seq_no]->duration, 0);
