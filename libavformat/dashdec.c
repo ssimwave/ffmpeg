@@ -866,8 +866,10 @@ static int parse_manifest_representation(AVFormatContext *s, const char *url,
     char *val = NULL;
     xmlNodePtr baseurl_nodes[4];
     xmlNodePtr representation_node = node;
-    char *rep_bandwidth_val;
     enum AVMediaType type = AVMEDIA_TYPE_UNKNOWN;
+
+    char *rep_bandwidth_val = xmlGetProp(representation_node, "bandwidth");
+    char *rep_framerate_val = xmlGetProp(representation_node, "frameRate");
 
     // try get information from representation
     if (type == AVMEDIA_TYPE_UNKNOWN)
