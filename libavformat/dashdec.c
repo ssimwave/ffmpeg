@@ -83,7 +83,7 @@ struct representation {
     AVFormatContext *ctx;
     int stream_index;
 
-    char id[20];
+    char *id;
     char *lang;
     int bandwidth;
     AVRational framerate;
@@ -382,6 +382,7 @@ static void free_representation(struct representation *pls)
 
     av_freep(&pls->url_template);
     av_freep(&pls->lang);
+    av_freep(&pls->id);
     av_freep(&pls);
 }
 
@@ -869,10 +870,10 @@ static int parse_manifest_representation(AVFormatContext *s, const char *url,
     char *val = NULL;
     xmlNodePtr baseurl_nodes[4];
     xmlNodePtr representation_node = node;
-    char *rep_id_val = xmlGetProp(representation_node, "id");
+    enum AVMediaType type = AVMEDIA_TYPE_UNKNOWN;
+
     char *rep_bandwidth_val = xmlGetProp(representation_node, "bandwidth");
     char *rep_framerate_val = xmlGetProp(representation_node, "frameRate");
-    enum AVMediaType type = AVMEDIA_TYPE_UNKNOWN;
 
     // try get information from representation
     if (type == AVMEDIA_TYPE_UNKNOWN)
@@ -905,6 +906,13 @@ static int parse_manifest_representation(AVFormatContext *s, const char *url,
         representation_segmenttemplate_node = find_child_node_by_name(representation_node, "SegmentTemplate");
         representation_baseurl_node = find_child_node_by_name(representation_node, "BaseURL");
         representation_segmentlist_node = find_child_node_by_name(representation_node, "SegmentList");
+        val = xmlGetProp(representation_node, "id");
+        if (val) {
+            rep->id = av_strdup(val);
+            xmlFree(val);
+            if (!rep->id)
+                goto enomem;
+        }
 
         baseurl_nodes[0] = mpd_baseurl_node;
         baseurl_nodes[1] = period_baseurl_node;
@@ -913,7 +921,7 @@ static int parse_manifest_representation(AVFormatContext *s, const char *url,
 
         ret = resolve_content_path(s, url, &c->max_url_size, baseurl_nodes, 4);
         c->max_url_size = aligned(c->max_url_size
-                                  + (rep_id_val ? strlen(rep_id_val) : 0)
+                                  + (rep->id ? strlen(rep->id) : 0)
                                   + (rep_bandwidth_val ? strlen(rep_bandwidth_val) : 0));
         if (ret == AVERROR(ENOMEM) || ret == 0)
             goto free;
@@ -933,7 +941,7 @@ static int parse_manifest_representation(AVFormatContext *s, const char *url,
                     goto enomem;
                 }
                 c->max_url_size = aligned(c->max_url_size  + strlen(initialization_val));
-                rep->init_section->url = get_content_url(baseurl_nodes, 4,  c->max_url_size, rep_id_val, rep_bandwidth_val, initialization_val);
+                rep->init_section->url = get_content_url(baseurl_nodes, 4,  c->max_url_size, rep->id, rep_bandwidth_val, initialization_val);
                 xmlFree(initialization_val);
                 if (!rep->init_section->url)
                     goto enomem;
@@ -942,7 +950,7 @@ static int parse_manifest_representation(AVFormatContext *s, const char *url,
             media_val = get_val_from_nodes_tab(fragment_templates_tab, 4, "media");
             if (media_val) {
                 c->max_url_size = aligned(c->max_url_size  + strlen(media_val));
-                rep->url_template = get_content_url(baseurl_nodes, 4, c->max_url_size, rep_id_val, rep_bandwidth_val, media_val);
+                rep->url_template = get_content_url(baseurl_nodes, 4, c->max_url_size, rep->id, rep_bandwidth_val, media_val);
                 xmlFree(media_val);
             }
             presentation_timeoffset_val = get_val_from_nodes_tab(fragment_templates_tab, 4, "presentationTimeOffset");
@@ -1007,7 +1015,7 @@ static int parse_manifest_representation(AVFormatContext *s, const char *url,
                 av_free(seg);
                 goto free;
             }
-            seg->url = get_content_url(baseurl_nodes, 4, c->max_url_size, rep_id_val, rep_bandwidth_val, NULL);
+            seg->url = get_content_url(baseurl_nodes, 4, c->max_url_size, rep->id, rep_bandwidth_val, NULL);
             if (!seg->url)
                 goto enomem;
             seg->size = -1;
@@ -1042,7 +1050,7 @@ static int parse_manifest_representation(AVFormatContext *s, const char *url,
             while (fragmenturl_node) {
                 ret = parse_manifest_segmenturlnode(s, rep, fragmenturl_node,
                                                     baseurl_nodes,
-                                                    rep_id_val,
+                                                    rep->id,
                                                     rep_bandwidth_val);
                 if (ret < 0)
                     goto free;
@@ -1062,7 +1070,7 @@ static int parse_manifest_representation(AVFormatContext *s, const char *url,
                 }
             }
         } else {
-            av_log(s, AV_LOG_ERROR, "Unknown format of Representation node id[%s] \n", (const char *)rep_id_val);
+            av_log(s, AV_LOG_ERROR, "Unknown format of Representation node id %s \n", rep->id ? rep->id : "");
             goto free;
         }
 
@@ -1070,7 +1078,6 @@ static int parse_manifest_representation(AVFormatContext *s, const char *url,
             if (rep->fragment_duration > 0 && !rep->fragment_timescale)
                 rep->fragment_timescale = 1;
             rep->bandwidth = rep_bandwidth_val ? atoi(rep_bandwidth_val) : 0;
-            strncpy(rep->id, rep_id_val ? rep_id_val : "", sizeof(rep->id));
             rep->framerate = av_make_q(0, 0);
             if (type == AVMEDIA_TYPE_VIDEO && rep_framerate_val) {
                 ret = av_parse_video_rate(&rep->framerate, rep_framerate_val);
@@ -1098,8 +1105,6 @@ static int parse_manifest_representation(AVFormatContext *s, const char *url,
     }
 
 end:
-    if (rep_id_val)
-        xmlFree(rep_id_val);
     if (rep_bandwidth_val)
         xmlFree(rep_bandwidth_val);
     if (rep_framerate_val)
@@ -2178,7 +2183,7 @@ static int dash_read_header(AVFormatContext *s)
             rep->assoc_stream = s->streams[rep->stream_index];
             if (rep->bandwidth > 0)
                 av_dict_set_int(&rep->assoc_stream->metadata, "variant_bitrate", rep->bandwidth, 0);
-            if (rep->id[0])
+            if (rep->id)
                 av_dict_set(&rep->assoc_stream->metadata, "id", rep->id, 0);
         }
         for (i = 0; i < c->n_audios; i++) {
@@ -2187,7 +2192,7 @@ static int dash_read_header(AVFormatContext *s)
             rep->assoc_stream = s->streams[rep->stream_index];
             if (rep->bandwidth > 0)
                 av_dict_set_int(&rep->assoc_stream->metadata, "variant_bitrate", rep->bandwidth, 0);
-            if (rep->id[0])
+            if (rep->id)
                 av_dict_set(&rep->assoc_stream->metadata, "id", rep->id, 0);
             if (rep->lang) {
                 av_dict_set(&rep->assoc_stream->metadata, "language", rep->lang, 0);
@@ -2198,7 +2203,7 @@ static int dash_read_header(AVFormatContext *s)
             rep = c->subtitles[i];
             av_program_add_stream_index(s, 0, rep->stream_index);
             rep->assoc_stream = s->streams[rep->stream_index];
-            if (rep->id[0])
+            if (rep->id)
                 av_dict_set(&rep->assoc_stream->metadata, "id", rep->id, 0);
             if (rep->lang) {
                 av_dict_set(&rep->assoc_stream->metadata, "language", rep->lang, 0);
