@@ -116,6 +116,13 @@ struct representation {
     uint32_t init_sec_buf_read_offset;
     int64_t cur_timestamp;
     int is_restart_needed;
+
+/******************************************************/
+/*         SSIMWAVE SPECIFIC CHANGES                  */
+/******************************************************/
+
+    ffurl_read_callback mpegts_parser_input_backup;
+    void* mpegts_parser_input_context_backup;
 };
 
 typedef struct DASHContext {
@@ -1364,7 +1371,10 @@ static int parse_manifest(AVFormatContext *s, const char *url, AVIOContext *in)
 cleanup:
         /*free the document */
         xmlFreeDoc(doc);
-        xmlCleanupParser();
+        /* https://stackoverflow.com/questions/49896108/libxml2-so-init-cleanupparser-usage-for-multiple-processes-with-threads
+         * Removed since it causes memory corruption in multithreaded environments
+         * xmlCleanupParser();
+         */
         xmlFreeNode(mpd_baseurl_node);
     }
 
@@ -1695,7 +1705,22 @@ static int open_input(DASHContext *c, struct representation *pls, struct fragmen
         av_dict_set_int(&opts, "end_offset", seg->url_offset + seg->size, 0);
     }
 
-    ff_make_absolute_url(url, c->max_url_size, c->base_url, seg->url);
+    ff_make_absolute_url(url, MAX_URL_SIZE, c->base_url, seg->url);
+
+    // SSIMWAVE
+    {
+        URLContext* urlCtx;
+        // Calculating Segment Size (in Bytes). Using ffurl_seek is much faster than avio_size
+        if (ffurl_open(&urlCtx, url, 0, 0, NULL) >= 0) {
+            seg->size = ffurl_seek(urlCtx, 0, AVSEEK_SIZE);
+        }
+        else {
+            seg->size = -1;
+        }
+        ffurl_close(urlCtx);
+        av_log(NULL, AV_LOG_DEBUG, "Seg: url: %s,  size = %"PRId64"\n", url, seg->size);
+    }
+
     av_log(pls->parent, AV_LOG_VERBOSE, "DASH request for url '%s', offset %"PRId64"\n",
            url, seg->url_offset);
     ret = open_url(pls->parent, &pls->input, url, &c->avio_opts, opts, NULL);
@@ -1770,6 +1795,17 @@ static int read_data(void *opaque, uint8_t *buf, int buf_size)
     struct representation *v = opaque;
     DASHContext *c = v->parent->priv_data;
 
+
+    /*
+     * SSIMWAVE Change for DASH TS parsing
+     * keep reference of mpegts parser callback mechanism
+     */
+    if(v->input) {
+        URLContext *urlc = ffio_geturlcontext(v->input);
+        v->mpegts_parser_input_backup = urlc->mpegts_parser_injection;
+        v->mpegts_parser_input_context_backup = urlc->mpegts_parser_injection_context;
+    }
+
 restart:
     if (!v->input) {
         free_fragment(&v->cur_seg);
@@ -1824,6 +1860,13 @@ restart:
     }
 
 end:
+    // replace mpegts parser callback mechanism
+    if(v->input) {
+        URLContext *urlc = ffio_geturlcontext(v->input);
+        urlc->mpegts_parser_injection = v->mpegts_parser_input_backup;
+        urlc->mpegts_parser_injection_context = v->mpegts_parser_input_context_backup;
+    }
+
     return ret;
 }
 
@@ -2178,7 +2221,10 @@ static void recheck_discard_flags(AVFormatContext *s, struct representation **p,
 
 static int dash_read_packet(AVFormatContext *s, AVPacket *pkt)
 {
+    AVDictionary* metadata_dict = NULL;
+    uint8_t* metadata_dict_packed = NULL;
     DASHContext *c = s->priv_data;
+    int metadata_dict_size = 0;
     int ret = 0, i;
     int64_t mints = 0;
     struct representation *cur = NULL;
@@ -2226,6 +2272,24 @@ static int dash_read_packet(AVFormatContext *s, AVPacket *pkt)
             /* If we got a packet, return it */
             cur->cur_timestamp = av_rescale(pkt->pts, (int64_t)cur->ctx->streams[0]->time_base.num * 90000, cur->ctx->streams[0]->time_base.den);
             pkt->stream_index = cur->stream_index;
+
+            av_dict_set_int(&metadata_dict, "segNumber", cur->cur_seq_no, 0);
+            if (NULL != cur->cur_seg) {
+                av_dict_set_int(&metadata_dict, "segSize", cur->cur_seg->size, 0);
+            }
+            av_dict_set_int(&metadata_dict, "fragTimescale", cur->fragment_timescale, 0);
+
+            if (cur->n_timelines) {
+                av_dict_set_int(&metadata_dict, "fragDuration", cur->timelines[0]->duration, 0);
+            }
+            else {
+                av_dict_set_int(&metadata_dict, "fragDuration", cur->fragment_duration, 0);
+            }
+
+            metadata_dict_packed = av_packet_pack_dictionary(metadata_dict, &metadata_dict_size);
+            av_dict_free(&metadata_dict);
+            av_packet_add_side_data(pkt, AV_PKT_DATA_STRINGS_METADATA, metadata_dict_packed, metadata_dict_size);
+
             return 0;
         }
         if (cur->is_restart_needed) {
