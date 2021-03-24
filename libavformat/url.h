@@ -46,6 +46,10 @@ typedef struct URLContext {
     const char *protocol_whitelist;
     const char *protocol_blacklist;
     int min_packet_size;        /**< if non zero, the stream is packetized with this min packet size */
+
+    // SSIMWAVE
+    ffurl_read_callback mpegts_parser_injection;
+    void* mpegts_parser_injection_context;
 } URLContext;
 
 typedef struct URLProtocol {
