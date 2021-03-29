@@ -77,6 +77,7 @@ enum KeyType {
 struct segment {
     int64_t duration;
     int64_t url_offset;
+    int64_t actual_size;
     int64_t size;
     char *url;
     char *key;
@@ -173,6 +174,19 @@ struct playlist {
      * playlist, if any. */
     int n_init_sections;
     struct segment **init_sections;
+
+    /* SSIMWAVE specific changes. */
+
+    /* Maintain mpegts parser callback mechanism for AVIOContext changes */
+    ffurl_read_callback mpegts_parser_input_backup;
+    void* mpegts_parser_input_context_backup;
+
+    /*
+     * This is used to accruately report the segment number on a per
+     * packet basis using the current packet position and the size of the
+     * segment.  */
+    int64_t reported_segment_number;
+    int64_t segment_boundary_position;
 };
 
 /*
@@ -216,6 +230,7 @@ typedef struct HLSContext {
     int m3u8_hold_counters;
     int live_start_index;
     int prefer_x_start;
+    char *selected_bandwidth;
     int first_packet;
     int64_t first_timestamp;
     int64_t cur_timestamp;
@@ -232,7 +247,44 @@ typedef struct HLSContext {
     int seg_max_retry;
     AVIOContext *playlist_pb;
     HLSCryptoContext  crypto_ctx;
+    int selected_variant_index;
+    int variant_count;
 } HLSContext;
+
+static void set_actual_segment_size(struct segment* seg) {
+    URLContext* urlCtx;
+    if (ffurl_open(&urlCtx, seg->url, 0, 0, NULL) >= 0) {
+        seg->actual_size = ffurl_seek(urlCtx, 0, AVSEEK_SIZE);
+    }
+    else {
+        seg->actual_size = -1;
+    }
+    ffurl_close(urlCtx);
+}
+
+static int is_variant_selected(HLSContext* c, const char* current_bandwidth) {
+    // Default case where no bandwidth or index is selected
+    if (c->selected_bandwidth && (strcmp(c->selected_bandwidth, "") == 0) && c->selected_variant_index == -1) {
+        return 1;
+    }
+    // Case where index is selected
+    else if (c->selected_variant_index != -1) {
+        if (c->variant_count++ == c->selected_variant_index) {
+            return 1;
+        }
+        else {
+            return 0;
+        }
+    }
+    // Case where bandwidth is selected
+    else if (current_bandwidth && c->selected_bandwidth && (strcmp(c->selected_bandwidth, "") != 0)) {
+        return (strcmp(c->selected_bandwidth, current_bandwidth) == 0);
+    }
+
+    // If we've gotten here this must mean that we've selected a variant but
+    // the index doesn't match
+    return 0;
+}
 
 static void free_segment_dynarray(struct segment **segments, int n_segments)
 {
@@ -455,6 +507,9 @@ static struct segment *new_init_section(struct playlist *pls,
         /* the entire file is the init section */
         sec->size = -1;
     }
+
+    // Actual Segment Size
+    set_actual_segment_size(sec);
 
     dynarray_add(&pls->init_sections, &pls->n_init_sections, sec);
 
@@ -800,6 +855,9 @@ static int parse_playlist(HLSContext *c, const char *url,
     int prev_n_segments = 0;
     int64_t prev_start_seq_no = -1;
 
+    // Reset variant count
+    c->variant_count = 0;
+
     if (is_http && !in && c->http_persistent && c->playlist_pb) {
         in = c->playlist_pb;
         ret = open_url_keepalive(c->ctx, &c->playlist_pb, url, NULL);
@@ -977,7 +1035,10 @@ static int parse_playlist(HLSContext *c, const char *url,
             av_log(c->ctx, AV_LOG_INFO, "Skip ('%s')\n", line);
             continue;
         } else if (line[0]) {
-            if (is_variant) {
+            if (is_variant && is_variant_selected(c, variant_info.bandwidth)) {
+                av_log(c, AV_LOG_INFO,
+                       "Variant %d with bandwidth=%s selected\n",
+                       c->variant_count, variant_info.bandwidth);
                 if (!new_variant(c, &variant_info, line, url)) {
                     ret = AVERROR(ENOMEM);
                     goto fail;
@@ -1050,6 +1111,7 @@ static int parse_playlist(HLSContext *c, const char *url,
                 }
                 seg->duration = duration;
                 seg->key_type = key_type;
+
                 dynarray_add(&pls->segments, &pls->n_segments, seg);
                 is_segment = 0;
 
@@ -1062,6 +1124,9 @@ static int parse_playlist(HLSContext *c, const char *url,
                     seg->url_offset = 0;
                     seg_offset = 0;
                 }
+
+                // Get actual segment size
+                set_actual_segment_size(seg);
 
                 seg->init_section = cur_init_section;
             }
@@ -1537,6 +1602,13 @@ static int read_data(void *opaque, uint8_t *buf, int buf_size)
     int segment_retries = 0;
     struct segment *seg;
 
+    // keep reference of mpegts parser callback mechanism
+    if(v->input && (!c->http_persistent || !v->input_read_done)) {
+        URLContext *urlc = ffio_geturlcontext(v->input);
+        v->mpegts_parser_input_backup = urlc->mpegts_parser_injection;
+        v->mpegts_parser_input_context_backup = urlc->mpegts_parser_injection_context;
+    }
+
 restart:
     if (!v->needed)
         return AVERROR_EOF;
@@ -1682,6 +1754,12 @@ reload:
             intercept_id3(v, buf, buf_size, &ret);
         }
 
+        // replace mpegts parser callback mechanism
+        if (v->input && (!c->http_persistent || !v->input_read_done) && (v->mpegts_parser_input_backup != 0)) {
+            URLContext *urlc = ffio_geturlcontext(v->input);
+            urlc->mpegts_parser_injection = v->mpegts_parser_input_backup;
+            urlc->mpegts_parser_injection_context = v->mpegts_parser_input_context_backup;
+        }
         return ret;
     }
     if (c->http_persistent &&
@@ -2217,6 +2295,9 @@ static int hls_read_header(AVFormatContext *s)
         if (ret < 0)
             return ret;
 
+        pls->segment_boundary_position = pls->segments[0]->actual_size;
+        pls->reported_segment_number = pls->start_seq_no;
+
         if (pls->id3_deferred_extra && pls->ctx->nb_streams == 1) {
             ff_id3v2_parse_apic(pls->ctx, pls->id3_deferred_extra);
             avformat_queue_attached_pictures(pls->ctx);
@@ -2355,6 +2436,10 @@ static int hls_read_packet(AVFormatContext *s, AVPacket *pkt)
 {
     HLSContext *c = s->priv_data;
     int ret, i, minplaylist = -1;
+    AVDictionary* metadata_dict = NULL;
+    uint8_t* metadata_dict_packed = NULL;
+    int metadata_dict_size = 0;
+    int relative_seq_no = 0;
 
     recheck_discard_flags(s, c->first_packet);
     c->first_packet = 0;
@@ -2476,6 +2561,41 @@ static int hls_read_packet(AVFormatContext *s, AVPacket *pkt)
 
         av_packet_move_ref(pkt, pls->pkt);
         pkt->stream_index = st->index;
+
+        /* Playlist metadata */
+        av_dict_set_int(&metadata_dict, "targetDuration", pls->target_duration, 0);
+        av_dict_set_int(&metadata_dict, "playlistType", pls->type, 0);
+        av_dict_set_int(&metadata_dict, "variants", c->n_variants, 0);
+        if (pls->index < c->n_variants) {
+            av_dict_set_int(&metadata_dict, "bandwidth", c->variants[pls->index]->bandwidth, 0);
+        }
+
+        /* Segment metadata */
+        {
+            int cur_seq_no = pls->cur_seq_no;
+            /* If the playlist is VOD then let's cap it to the number of segments */
+            if (pls->finished) {
+                if (pkt->pos >= pls->segment_boundary_position + pls->init_sec_buf_read_offset) {
+                    pls->reported_segment_number++;
+                    pls->segment_boundary_position += pls->segments[pls->reported_segment_number - pls->start_seq_no]->actual_size;
+                }
+                cur_seq_no = pls->reported_segment_number;
+            }
+            av_log(c, AV_LOG_DEBUG, "Segment %ld (cur %d) pkt position %ld next_boundary %ld\n",
+                    pls->reported_segment_number, pls->cur_seq_no, pkt->pos, pls->segment_boundary_position);
+
+            av_dict_set_int(&metadata_dict, "segNumber", cur_seq_no, 0);
+            relative_seq_no = cur_seq_no - pls->start_seq_no;
+        }
+        if (relative_seq_no < pls->n_segments) {
+            av_dict_set_int(&metadata_dict, "segSize", pls->segments[relative_seq_no]->actual_size, 0);
+            av_dict_set_int(&metadata_dict, "segDuration", pls->segments[relative_seq_no]->duration, 0);
+            av_dict_set_int(&metadata_dict, "encryptionType", pls->segments[relative_seq_no]->key_type, 0);
+        }
+
+        metadata_dict_packed = av_packet_pack_dictionary(metadata_dict, &metadata_dict_size);
+        av_dict_free(&metadata_dict);
+        av_packet_add_side_data(pkt, AV_PKT_DATA_STRINGS_METADATA, metadata_dict_packed, metadata_dict_size);
 
         if (pkt->dts != AV_NOPTS_VALUE)
             c->cur_timestamp = av_rescale_q(pkt->dts,
@@ -2664,6 +2784,12 @@ static const AVOption hls_options[] = {
         OFFSET(seg_format_opts), AV_OPT_TYPE_DICT, {.str = NULL}, 0, 0, FLAGS},
     {"seg_max_retry", "Maximum number of times to reload a segment on error.",
      OFFSET(seg_max_retry), AV_OPT_TYPE_INT, {.i64 = 0}, 0, INT_MAX, FLAGS},
+    {"selected_bandwidth", "bandwidth of selected variant",
+        OFFSET(selected_bandwidth), AV_OPT_TYPE_STRING,
+        {.str = ""}, INT_MIN, INT_MAX, FLAGS},
+    {"selected_variant_index", "selected index of EXT-X-STREAM-INF",
+        OFFSET(selected_variant_index), AV_OPT_TYPE_INT,
+        {.i64 = -1}, INT_MIN, INT_MAX, FLAGS},
     {NULL}
 };
 
