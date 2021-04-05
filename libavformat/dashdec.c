@@ -1711,7 +1711,7 @@ static int open_input(DASHContext *c, struct representation *pls, struct fragmen
     {
         URLContext* urlCtx;
         // Calculating Segment Size (in Bytes). Using ffurl_seek is much faster than avio_size
-        if (ffurl_open(&urlCtx, url, 0, 0, NULL) >= 0) {
+        if (ffurl_open_whitelist(&urlCtx, url, 0, NULL, NULL, NULL, NULL, NULL) >= 0) {
             seg->size = ffurl_seek(urlCtx, 0, AVSEEK_SIZE);
         }
         else {

@@ -175,7 +175,7 @@ struct playlist {
     void* mpegts_parser_input_context_backup;
 
     /*
-     * This is used to accruately report the segment number on a per
+     * This is used to accurately report the segment number on a per
      * packet basis using the current packet position and the size of the
      * segment.  */
     int64_t reported_segment_number;
@@ -240,20 +240,22 @@ typedef struct HLSContext {
     int variant_count;
 } HLSContext;
 
-static void set_actual_segment_size(struct segment* seg) {
+static int64_t get_actual_segment_size(struct segment* seg) {
     URLContext* urlCtx;
-    if (ffurl_open(&urlCtx, seg->url, 0, 0, NULL) >= 0) {
-        seg->actual_size = ffurl_seek(urlCtx, 0, AVSEEK_SIZE);
-    }
-    else {
-        seg->actual_size = -1;
+    int64_t actual_size = -1;
+
+    if (ffurl_open_whitelist(&urlCtx, seg->url, 0, NULL, NULL, NULL, NULL, NULL) >= 0) {
+        actual_size = ffurl_seek(urlCtx, 0, AVSEEK_SIZE);
     }
     ffurl_close(urlCtx);
+
+    return actual_size;
 }
 
 static int is_variant_selected(HLSContext* c, const char* current_bandwidth) {
     // Default case where no bandwidth or index is selected
     if (c->selected_bandwidth && (strcmp(c->selected_bandwidth, "") == 0) && c->selected_variant_index == -1) {
+        c->variant_count++;
         return 1;
     }
     // Case where index is selected
@@ -267,7 +269,13 @@ static int is_variant_selected(HLSContext* c, const char* current_bandwidth) {
     }
     // Case where bandwidth is selected
     else if (current_bandwidth && c->selected_bandwidth && (strcmp(c->selected_bandwidth, "") != 0)) {
-        return (strcmp(c->selected_bandwidth, current_bandwidth) == 0);
+        if (strcmp(c->selected_bandwidth, current_bandwidth) == 0) {
+            c->variant_count++;
+            return 1;
+        }
+        else {
+            return 0;
+        }
     }
 
     // If we've gotten here this must mean that we've selected a variant but
@@ -502,7 +510,7 @@ static struct segment *new_init_section(struct playlist *pls,
     }
 
     // Actual Segment Size
-    set_actual_segment_size(sec);
+    sec->actual_size = get_actual_segment_size(sec);
 
     dynarray_add(&pls->init_sections, &pls->n_init_sections, sec);
 
@@ -1013,7 +1021,6 @@ static int parse_playlist(HLSContext *c, const char *url,
                 }
                 seg->duration = duration;
                 seg->key_type = key_type;
-
                 dynarray_add(&pls->segments, &pls->n_segments, seg);
                 is_segment = 0;
 
@@ -1028,7 +1035,7 @@ static int parse_playlist(HLSContext *c, const char *url,
                 }
 
                 // Get actual segment size
-                set_actual_segment_size(seg);
+                seg->actual_size = get_actual_segment_size(seg);
 
                 seg->init_section = cur_init_section;
             }
