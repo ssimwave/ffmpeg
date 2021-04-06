@@ -249,17 +249,24 @@ typedef struct HLSContext {
     HLSCryptoContext  crypto_ctx;
     int selected_variant_index;
     int variant_count;
+    char *sample_aes_iv;
+    char *sample_aes_cek_location;
 } HLSContext;
 
-static int64_t get_actual_segment_size(struct segment* seg) {
-    URLContext* urlCtx;
+static int64_t get_actual_segment_size(struct playlist *pls, struct segment* seg) {
+    AVFormatContext* s = pls->parent;
+    HLSContext *c = s->priv_data;
+    AVIOContext* pb = NULL;
+    AVDictionary *opts = NULL;
     int64_t actual_size = -1;
 
-    if (ffurl_open_whitelist(&urlCtx, seg->url, 0, NULL, NULL, NULL, NULL, NULL) >= 0) {
-        actual_size = ffurl_seek(urlCtx, 0, AVSEEK_SIZE);
+    av_dict_copy(&opts, c->avio_opts, 0);
+    if (s->io_open(s, &pb, seg->url, AVIO_FLAG_READ, &opts) >= 0) {
+        actual_size = avio_size(pb);
     }
-    ffurl_close(urlCtx);
-
+    ff_format_io_close(s, &pb);
+    av_dict_free(&opts);
+    av_log(s, AV_LOG_DEBUG, "Segment %s, size %ld\n", seg->url, actual_size);
     return actual_size;
 }
 
@@ -516,8 +523,8 @@ static struct segment *new_init_section(struct playlist *pls,
         sec->size = -1;
     }
 
-    // Actual Segment Size
-    sec->actual_size = get_actual_segment_size(sec);
+    // set later
+    sec->actual_size = -1;
 
     dynarray_add(&pls->init_sections, &pls->n_init_sections, sec);
 
@@ -938,6 +945,17 @@ static int parse_playlist(HLSContext *c, const char *url,
                 ff_hex_to_data(iv, info.iv + 2);
                 has_iv = 1;
             }
+
+            if (c->sample_aes_iv && (strcmp(c->sample_aes_iv, "") != 0)) {
+                ff_hex_to_data(iv, c->sample_aes_iv);
+                has_iv = 1;
+                av_log(c->ctx, 0, "Overwrote IV with input 0x%x\n", iv);
+            }
+
+            if (c->sample_aes_cek_location && (strcmp(c->sample_aes_cek_location, "") != 0)) {
+                strcpy(info.uri, c->sample_aes_cek_location);
+                av_log(c->ctx, 0, "Overwrote URI with input %s\n", info.uri);
+            }
             av_strlcpy(key, info.uri, sizeof(key));
         } else if (av_strstart(line, "#EXT-X-MEDIA:", &ptr)) {
             struct rendition_info info = {{0}};
@@ -1131,9 +1149,6 @@ static int parse_playlist(HLSContext *c, const char *url,
                     seg->url_offset = 0;
                     seg_offset = 0;
                 }
-
-                // Get actual segment size
-                seg->actual_size = get_actual_segment_size(seg);
 
                 seg->init_section = cur_init_section;
             }
@@ -1461,7 +1476,7 @@ static int open_input(HLSContext *c, struct playlist *pls, struct segment *seg, 
         }
         ret = 0;
     } else {
-        ret = open_url(pls->parent, in, seg->url, &c->avio_opts, opts, &is_http);
+        ret = open_url(pls->parent, in, seg->url, &c->avio_opts, opts, &is_http, pls->main_streams, pls->n_main_streams);
     }
 
     /* Seek to the requested position. If this was a HTTP request, the offset
@@ -1685,6 +1700,9 @@ reload:
 
         v->input_read_done = 0;
         seg = current_segment(v);
+
+        // Get actual segment size
+        seg->actual_size = get_actual_segment_size(v, seg);
 
         /* load/update Media Initialization Section, if any */
         ret = update_init_section(v, seg);
@@ -2445,7 +2463,7 @@ static int hls_read_packet(AVFormatContext *s, AVPacket *pkt)
     int ret, i, minplaylist = -1;
     AVDictionary* metadata_dict = NULL;
     uint8_t* metadata_dict_packed = NULL;
-    int metadata_dict_size = 0;
+    size_t metadata_dict_size = 0;
     int relative_seq_no = 0;
 
     recheck_discard_flags(s, c->first_packet);
@@ -2583,12 +2601,17 @@ static int hls_read_packet(AVFormatContext *s, AVPacket *pkt)
             /* If the playlist is VOD then let's cap it to the number of segments */
             if (pls->finished) {
                 if (pkt->pos >= pls->segment_boundary_position + pls->init_sec_buf_read_offset) {
-                    pls->reported_segment_number++;
-                    pls->segment_boundary_position += pls->segments[pls->reported_segment_number - pls->start_seq_no]->actual_size;
+                    if ((pls->reported_segment_number - pls->start_seq_no) + 1 < pls->n_segments) {
+                        pls->reported_segment_number++;
+                        pls->segment_boundary_position += pls->segments[pls->reported_segment_number - pls->start_seq_no]->actual_size;
+                    }
                 }
                 cur_seq_no = pls->reported_segment_number;
             }
-            av_log(c, AV_LOG_DEBUG, "Segment %ld (cur %d) pkt position %ld next_boundary %ld\n",
+            else {
+                pls->reported_segment_number = cur_seq_no;
+            }
+            av_log(c, AV_LOG_DEBUG, "Segment %ld (cur %ld) pkt position %ld next_boundary %ld\n",
                     pls->reported_segment_number, pls->cur_seq_no, pkt->pos, pls->segment_boundary_position);
 
             av_dict_set_int(&metadata_dict, "segNumber", cur_seq_no, 0);
@@ -2797,6 +2820,12 @@ static const AVOption hls_options[] = {
     {"selected_variant_index", "selected index of EXT-X-STREAM-INF",
         OFFSET(selected_variant_index), AV_OPT_TYPE_INT,
         {.i64 = -1}, INT_MIN, INT_MAX, FLAGS},
+    {"sample_aes_iv", "IV for Sample AES stream",
+        OFFSET(sample_aes_iv), AV_OPT_TYPE_STRING,
+        {.str = ""}, 0, 0, FLAGS},
+    {"sample_aes_cek_location", "URI of the location of the Sample AES stream",
+        OFFSET(sample_aes_cek_location), AV_OPT_TYPE_STRING,
+        {.str = ""}, 0, 0, FLAGS},
     {NULL}
 };
 
