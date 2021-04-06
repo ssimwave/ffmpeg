@@ -1034,9 +1034,6 @@ static int parse_playlist(HLSContext *c, const char *url,
                     seg_offset = 0;
                 }
 
-                // Get actual segment size
-                seg->actual_size = get_actual_segment_size(seg);
-
                 seg->init_section = cur_init_section;
             }
         }
@@ -1583,6 +1580,9 @@ reload:
 
         v->input_read_done = 0;
         seg = current_segment(v);
+
+        // Get actual segment size
+        seg->actual_size = get_actual_segment_size(seg);
 
         /* load/update Media Initialization Section, if any */
         ret = update_init_section(v, seg);
