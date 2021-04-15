@@ -1800,7 +1800,6 @@ static int open_input(DASHContext *c, struct representation *pls, struct fragmen
     AVDictionary *opts = NULL;
     char *url = NULL;
     int ret = 0;
-    URLContext* urlCtx;
 
     url = av_mallocz(c->max_url_size);
     if (!url) {
@@ -1816,15 +1815,7 @@ static int open_input(DASHContext *c, struct representation *pls, struct fragmen
     }
 
     ff_make_absolute_url(url, MAX_URL_SIZE, c->base_url, seg->url);
-
-    // Calculating Segment Size (in Bytes). Using ffurl_seek is much faster than avio_size
-    if (ffurl_open(&urlCtx, url, 0, 0, NULL) >= 0)
-        seg->size = ffurl_seek(urlCtx, 0, AVSEEK_SIZE);
-    else
-        seg->size = -1;
-    ffurl_close(urlCtx);
-    av_log(NULL, AV_LOG_DEBUG, "Seg: url: %s,  size = %"PRId64"\n", url, seg->size);
-
+    seg->size = -1;
     av_log(pls->parent, AV_LOG_VERBOSE, "DASH request for url '%s', offset %"PRId64", playlist %d\n",
            url, seg->url_offset, pls->rep_idx);
     ret = open_url(pls->parent, &pls->input, url, c->avio_opts, opts, NULL);
