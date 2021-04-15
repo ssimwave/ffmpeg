@@ -1691,49 +1691,6 @@ static struct fragment *get_current_fragment(struct representation *pls)
         }
     }
     if (c->is_live) {
-        // SSIMWAVE CODE
-        while (!(ff_check_interrupt(c->interrupt_callback))) {
-            int64_t min_seq_no = calc_min_seg_no(pls->parent, pls);
-            int64_t max_seq_no = calc_max_seg_no(pls, c);
-
-            if (pls->cur_seq_no < min_seq_no) {
-                if ( c->is_live && ( ( pls->timelines ) ||
-                                     ( pls->fragments )  ||
-                                     ( pls->tmp_url_type == TMP_URL_TYPE_NUMBER )
-                                   )
-                   ) {
-                    refresh_manifest(pls->parent);
-                }
-                // User picks which segment to fetch
-                if (c->live_start_index == 0 || !c->is_live)
-                    pls->cur_seq_no = calc_cur_seg_no(pls->parent, pls);
-                else if (c->live_start_index < 0)
-                    pls->cur_seq_no = pls->last_seq_no + c->live_start_index + 1;
-                else if (c->live_start_index > 0)
-                    pls->cur_seq_no = pls->first_seq_no + c->live_start_index - 1;
-            }
-            else if (pls->cur_seq_no == min_seq_no) { // Don't Refresh this case. @Shahzad for info!
-                // User picks which segment to fetch
-                if (c->live_start_index == 0 || !c->is_live)
-                    pls->cur_seq_no = calc_cur_seg_no(pls->parent, pls);
-                else if (c->live_start_index < 0)
-                    pls->cur_seq_no = pls->last_seq_no + c->live_start_index + 1;
-                else if (c->live_start_index > 0)
-                    pls->cur_seq_no = pls->first_seq_no + c->live_start_index - 1;
-            }
-            else if (pls->cur_seq_no > max_seq_no) {
-                if ( c->is_live && ( ( pls->timelines ) ||
-                                     ( pls->fragments )  ||
-                                     ( pls->tmp_url_type == TMP_URL_TYPE_NUMBER )
-                                   )
-                   ) {
-                    refresh_manifest(pls->parent);
-                }
-                continue;
-            }
-            break;
-        } // END SSIMWAVE CODE
-
         min_seq_no = calc_min_seg_no(pls->parent, pls);
         max_seq_no = calc_max_seg_no(pls, c);
 
