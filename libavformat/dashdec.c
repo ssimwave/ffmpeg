@@ -1404,6 +1404,7 @@ static int parse_manifest(AVFormatContext *s, const char *url, AVIOContext *in)
                     attr = attr->next;
                     xmlFree(val);
                 }
+                av_log(s, NULL, "Current Duration %d | Period Duration %lld\n", period_duration_sec, c->period_duration);
                 if ((period_duration_sec) >= (c->period_duration)) {
                     period_node = node;
                     c->period_duration = period_duration_sec;
