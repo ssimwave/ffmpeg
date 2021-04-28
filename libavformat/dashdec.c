@@ -31,6 +31,12 @@
 #define INITIAL_BUFFER_SIZE 32768
 #define MAX_FIELD_LEN 64
 
+//#define SSIMWAVE_FETCH_SAME_SEQ_AFTER_FAILURE 1
+#define SSIMWAVE_SEG_NO_START_ADJ 1
+//#define SSIMWAVE_FRAGMENT_SELECT 1
+//#define SSIMWAVE_SEG_GET_LENGTH 1
+
+
 struct fragment {
     int64_t url_offset;
     int64_t size;
@@ -137,14 +143,14 @@ struct representation {
     int fix_multiple_stsd_order;
     /**
      *  record the sequence number of the first segment
-     *  in current timeline. 
-     *  Since the problem mpd availabilityStartTime is UTC epoch 
+     *  in current timeline.
+     *  Since the problem mpd availabilityStartTime is UTC epoch
      *  starting time, the cur_seq_no is already big number
-     *  get_fragment_start_time use local counter to compare 
-     *  with cur_seq_no which then blow up the result, it always 
+     *  get_fragment_start_time use local counter to compare
+     *  with cur_seq_no which then blow up the result, it always
      *  return the last segment timestamp in the timeline.
      *  Use this temporary variable to track the first seq_no.
-     */ 
+     */
 
     int64_t first_seq_no_in_representation;
 
@@ -181,6 +187,8 @@ typedef struct DASHContext {
     struct representation **audios;
     int n_subtitles;
     struct representation **subtitles;
+
+    struct representation *last_rep;
 
     /* MediaPresentationDescription Attribute */
     uint64_t media_presentation_duration;
@@ -1462,12 +1470,16 @@ static int64_t calc_cur_seg_no(AVFormatContext *s, struct representation *pls)
             num = pls->first_seq_no;
         } else if (pls->n_timelines) {
             av_log(s, AV_LOG_TRACE, "in n_timelines mode\n");
+#ifdef SSIMWAVE_SEG_NO_START_ADJ
+            num = pls->first_seq_no;
+#else
             start_time_offset = get_segment_start_time_based_on_timeline(pls, 0xFFFFFFFF) - 60 * pls->fragment_timescale; // 60 seconds before end
             num = calc_next_seg_no_from_timelines(pls, start_time_offset);
             if (num == -1)
                 num = pls->first_seq_no;
             else
                 num += pls->first_seq_no;
+#endif
         } else if (pls->fragment_duration){
             av_log(s, AV_LOG_TRACE, "in fragment_duration mode fragment_timescale = %"PRId64", presentation_timeoffset = %"PRId64"\n", pls->fragment_timescale, pls->presentation_timeoffset);
             if (pls->presentation_timeoffset) {
@@ -1535,12 +1547,13 @@ static void move_timelines(struct representation *rep_src, struct representation
         rep_dest->timelines    = rep_src->timelines;
         rep_dest->n_timelines  = rep_src->n_timelines;
         rep_dest->first_seq_no = rep_src->first_seq_no;
-        
+
         rep_dest->last_seq_no = calc_max_seg_no(rep_dest, c);
-        
+
         rep_src->timelines = NULL;
         rep_src->n_timelines = 0;
         rep_dest->cur_seq_no = rep_src->cur_seq_no;
+        rep_dest->cur_timestamp = rep_src->cur_timestamp;
     }
 }
 
@@ -1558,6 +1571,7 @@ static void move_segments(struct representation *rep_src, struct representation 
         rep_dest->last_seq_no = calc_max_seg_no(rep_dest, c);
         rep_src->fragments = NULL;
         rep_src->n_fragments = 0;
+        rep_dest->cur_timestamp = rep_src->cur_timestamp;
     }
 }
 
@@ -1609,10 +1623,26 @@ static int refresh_manifest(AVFormatContext *s)
         struct representation *cur_video = videos[i];
         struct representation *ccur_video = c->videos[i];
         if (cur_video->timelines) {
+#ifdef SSIMWAVE_SEG_NO_START_ADJ
+            // calc current time and update segments
+            int first_seq_no_offset = cur_video->first_seq_no <= cur_video->cur_seq_no;
+            if (first_seq_no_offset) {
+                int curr_offset_seq_no = cur_video->cur_seq_no - cur_video->first_seq_no;
+                int64_t curr_time = get_segment_start_time_based_on_timeline(cur_video, curr_offset_seq_no) / cur_video->fragment_timescale;
+                av_log(c, 0, "refresh manifest (video): cur seq no %d\n", curr_offset_seq_no);
+                ccur_video->cur_seq_no = ccur_video->first_seq_no + calc_next_seg_no_from_timelines(ccur_video, curr_time * cur_video->fragment_timescale - 1);
+                av_log(c, 0, "refresh manifest (video): new cur seq no %d\n", ccur_video->cur_seq_no);
+            }
+            else {
+                int64_t curr_time = get_segment_start_time_based_on_timeline(cur_video, cur_video->cur_seq_no) / cur_video->fragment_timescale;
+                ccur_video->cur_seq_no = calc_next_seg_no_from_timelines(ccur_video, curr_time * cur_video->fragment_timescale - 1);
+            }
+#else
             // calc current time
             int64_t currentTime = get_segment_start_time_based_on_timeline(cur_video, cur_video->cur_seq_no) / cur_video->fragment_timescale;
             // update segments
             ccur_video->cur_seq_no = calc_next_seg_no_from_timelines(ccur_video, currentTime * cur_video->fragment_timescale - 1);
+#endif
             if (ccur_video->cur_seq_no >= 0) {
                 move_timelines(ccur_video, cur_video, c);
             }
@@ -1625,10 +1655,26 @@ static int refresh_manifest(AVFormatContext *s)
         struct representation *cur_audio = audios[i];
         struct representation *ccur_audio = c->audios[i];
         if (cur_audio->timelines) {
+#ifdef SSIMWAVE_SEG_NO_START_ADJ
+            // calc current time and update segments
+            int first_seq_no_offset = cur_audio->first_seq_no <= cur_audio->cur_seq_no;
+            if (first_seq_no_offset) {
+                int curr_offset_seq_no = cur_audio->cur_seq_no - cur_audio->first_seq_no;
+                int64_t curr_time = get_segment_start_time_based_on_timeline(cur_audio, curr_offset_seq_no) / cur_audio->fragment_timescale;
+                av_log(c, 0, "refresh manifest (audio): cur seq no %d\n", curr_offset_seq_no);
+                ccur_audio->cur_seq_no = ccur_audio->first_seq_no + calc_next_seg_no_from_timelines(ccur_audio, curr_time * cur_audio->fragment_timescale - 1);
+                av_log(c, 0, "refresh manifest (audio): new cur seq no %d\n", ccur_audio->cur_seq_no);
+            }
+            else {
+                int64_t curr_time = get_segment_start_time_based_on_timeline(cur_audio, cur_audio->cur_seq_no) / cur_audio->fragment_timescale;
+                ccur_audio->cur_seq_no = calc_next_seg_no_from_timelines(ccur_audio, curr_time * cur_audio->fragment_timescale - 1);
+            }
+#else
             // calc current time
             int64_t currentTime = get_segment_start_time_based_on_timeline(cur_audio, cur_audio->cur_seq_no) / cur_audio->fragment_timescale;
             // update segments
             ccur_audio->cur_seq_no = calc_next_seg_no_from_timelines(ccur_audio, currentTime * cur_audio->fragment_timescale - 1);
+#endif
             if (ccur_audio->cur_seq_no >= 0) {
                 move_timelines(ccur_audio, cur_audio, c);
             }
@@ -1691,10 +1737,14 @@ static struct fragment *get_current_fragment(struct representation *pls)
         }
     }
     if (c->is_live) {
+#ifdef SSIMWAVE_FRAGMENT_SELECT
         // SSIMWAVE CODE
         while (!(ff_check_interrupt(c->interrupt_callback))) {
             int64_t min_seq_no = calc_min_seg_no(pls->parent, pls);
             int64_t max_seq_no = calc_max_seg_no(pls, c);
+
+            av_log(pls->parent, AV_LOG_VERBOSE, "cur[%"PRId64"] min[%"PRId64"] max[%"PRId64"], playlist %d\n",
+                (int64_t)pls->cur_seq_no, min_seq_no, max_seq_no, (int)pls->rep_idx);
 
             if (pls->cur_seq_no < min_seq_no) {
                 if ( c->is_live && ( ( pls->timelines ) ||
@@ -1733,19 +1783,22 @@ static struct fragment *get_current_fragment(struct representation *pls)
             }
             break;
         } // END SSIMWAVE CODE
-
+#else
         min_seq_no = calc_min_seg_no(pls->parent, pls);
         max_seq_no = calc_max_seg_no(pls, c);
 
         if (pls->timelines || pls->fragments) {
             refresh_manifest(pls->parent);
         }
-        if (pls->cur_seq_no <= min_seq_no) {
+        // SSIMWAVE: TODO <= or <?
+        //if (pls->cur_seq_no <= min_seq_no) {
+        if (pls->cur_seq_no < min_seq_no) {
             av_log(pls->parent, AV_LOG_VERBOSE, "old fragment: cur[%"PRId64"] min[%"PRId64"] max[%"PRId64"], playlist %d\n", (int64_t)pls->cur_seq_no, min_seq_no, max_seq_no, (int)pls->rep_idx);
             pls->cur_seq_no = calc_cur_seg_no(pls->parent, pls);
         } else if (pls->cur_seq_no > max_seq_no) {
             av_log(pls->parent, AV_LOG_VERBOSE, "new fragment: min[%"PRId64"] max[%"PRId64"], playlist %d\n", min_seq_no, max_seq_no, (int)pls->rep_idx);
         }
+#endif
         seg = av_mallocz(sizeof(struct fragment));
         if (!seg) {
             return NULL;
@@ -1817,6 +1870,7 @@ static int open_input(DASHContext *c, struct representation *pls, struct fragmen
 
     ff_make_absolute_url(url, MAX_URL_SIZE, c->base_url, seg->url);
 
+#ifdef SSIMWAVE_SEG_GET_LENGTH
     // Calculating Segment Size (in Bytes). Using ffurl_seek is much faster than avio_size
     if (ffurl_open(&urlCtx, url, 0, 0, NULL) >= 0)
         seg->size = ffurl_seek(urlCtx, 0, AVSEEK_SIZE);
@@ -1824,10 +1878,14 @@ static int open_input(DASHContext *c, struct representation *pls, struct fragmen
         seg->size = -1;
     ffurl_close(urlCtx);
     av_log(NULL, AV_LOG_DEBUG, "Seg: url: %s,  size = %"PRId64"\n", url, seg->size);
+#endif
 
-    av_log(pls->parent, AV_LOG_VERBOSE, "DASH request for url '%s', offset %"PRId64", playlist %d\n",
-           url, seg->url_offset, pls->rep_idx);
+    /*av_log(pls->parent, AV_LOG_VERBOSE, "DASH request for url '%s', offset %"PRId64", playlist %d\n",
+           url, seg->url_offset, pls->rep_idx);*/
     ret = open_url(pls->parent, &pls->input, url, c->avio_opts, opts, NULL);
+
+    av_log(pls->parent, 0, "DASH request for url '%s', offset %"PRId64", playlist %d, ret %d\n",
+           url, seg->url_offset, pls->rep_idx, ret);
 
 cleanup:
     av_free(url);
@@ -1936,8 +1994,10 @@ restart:
                 ret = AVERROR_EXIT;
                 goto end;
             }
-            av_log(v->parent, AV_LOG_WARNING, "Failed to open fragment of playlist %d\n", v->rep_idx);
+            av_log(v->parent, 0, "Failed to open fragment of playlist %d, cur seg %d\n", v->rep_idx, v->cur_seq_no);
+#ifndef SSIMWAVE_FETCH_SAME_SEQ_AFTER_FAILURE
             v->cur_seq_no++;
+#endif
             goto restart;
         }
     }
@@ -1960,10 +2020,13 @@ restart:
         goto end;
     }
     ret = read_from_url(v, v->cur_seg, buf, buf_size);
+    av_log(v->parent, 0, "Read segment from rep %p idx %d, cur seg %d\n", v, v->rep_idx, v->cur_seq_no);
+
     if (ret > 0)
         goto end;
 
     if (c->is_live || v->cur_seq_no < v->last_seq_no) {
+        av_log(v->parent, 0, "Done segment from rep %p idx %d, cur seg %d\n", v, v->rep_idx, v->cur_seq_no);
         if (!v->is_restart_needed)
             v->cur_seq_no++;
         v->is_restart_needed = 1;
@@ -1985,7 +2048,7 @@ static int save_avio_options(AVFormatContext *s)
 {
     DASHContext *c = s->priv_data;
     const char *opts[] = {
-        "headers", "user_agent", "cookies", "http_proxy", "referer", "rw_timeout", NULL };
+        "headers", "user_agent", "cookies", "http_proxy", "referer", "rw_timeout", "icy", NULL };
     const char **opt = opts;
     uint8_t *buf = NULL;
     int ret = 0;
@@ -2324,58 +2387,83 @@ static void recheck_discard_flags(AVFormatContext *s, struct representation **p,
     }
 }
 
-static int dash_read_packet(AVFormatContext *s, AVPacket *pkt)
-{
-    AVDictionary* metadata_dict = NULL;
-    uint8_t* metadata_dict_packed = NULL;
+static struct representation* get_next_rep(AVFormatContext *s, struct representation* cur_rep) {
     DASHContext *c = s->priv_data;
-    int metadata_dict_size = 0;
-    int ret = 0, i;
     int64_t mints = 0;
-    struct representation *cur = NULL;
-    struct representation *rep = NULL;
+    int i;
+    struct representation* new_rep = NULL;
+    struct representation* rep = NULL;
 
-    recheck_discard_flags(s, c->videos, c->n_videos);
-    recheck_discard_flags(s, c->audios, c->n_audios);
-    recheck_discard_flags(s, c->subtitles, c->n_subtitles);
+    if (1 >= (c->n_videos + c->n_audios + c->n_subtitles)) {
+        cur_rep = NULL;
+    }
 
     for (i = 0; i < c->n_videos; i++) {
         rep = c->videos[i];
-        if (!rep->ctx)
+        if (!rep->ctx || rep == cur_rep)
             continue;
-        if (!cur || rep->cur_timestamp < mints) {
-            cur = rep;
+        if (!new_rep || rep->cur_timestamp < mints) {
+            new_rep = rep;
             mints = rep->cur_timestamp;
         }
     }
     for (i = 0; i < c->n_audios; i++) {
         rep = c->audios[i];
-        if (!rep->ctx)
+        if (!rep->ctx || rep == cur_rep)
             continue;
-        if (!cur || rep->cur_timestamp < mints) {
-            cur = rep;
+        if (!new_rep || rep->cur_timestamp < mints) {
+            new_rep = rep;
             mints = rep->cur_timestamp;
         }
     }
 
     for (i = 0; i < c->n_subtitles; i++) {
         rep = c->subtitles[i];
-        if (!rep->ctx)
+        if (!rep->ctx || rep == cur_rep)
             continue;
-        if (!cur || rep->cur_timestamp < mints) {
-            cur = rep;
+        if (!new_rep || rep->cur_timestamp < mints) {
+            new_rep = rep;
             mints = rep->cur_timestamp;
         }
     }
 
+    return new_rep;
+}
+
+static int dash_read_packet(AVFormatContext *s, AVPacket *pkt)
+{
+    AVDictionary* metadata_dict = NULL;
+    uint8_t* metadata_dict_packed = NULL;
+    DASHContext *c = s->priv_data;
+    int metadata_dict_size = 0;
+    int ret = 0;
+    struct representation *cur = NULL;
+
+    recheck_discard_flags(s, c->videos, c->n_videos);
+    recheck_discard_flags(s, c->audios, c->n_audios);
+    recheck_discard_flags(s, c->subtitles, c->n_subtitles);
+
+    cur = get_next_rep(s, /*c->last_rep*/ NULL);
     if (!cur) {
         return AVERROR_INVALIDDATA;
     }
 
     while (!ff_check_interrupt(c->interrupt_callback) && !ret) {
+        if (cur->is_restart_needed) {
+            cur->cur_seg_offset = 0;
+            cur->init_sec_buf_read_offset = 0;
+            // TODO TOM
+            if (cur->ctx)
+                ff_read_frame_flush(cur->ctx);
+            if (cur->input)
+                ff_format_io_close(cur->parent, &cur->input);
+            ret = reopen_demux_for_component(s, cur);
+            cur->is_restart_needed = 0;
+        }
         ret = av_read_frame(cur->ctx, pkt);
         if (ret >= 0) {
             /* If we got a packet, return it */
+            c->last_rep = cur;
             cur->cur_timestamp = av_rescale(pkt->pts, (int64_t)cur->ctx->streams[0]->time_base.num * 90000, cur->ctx->streams[0]->time_base.den);
             pkt->stream_index = cur->stream_index;
 
@@ -2397,14 +2485,6 @@ static int dash_read_packet(AVFormatContext *s, AVPacket *pkt)
             av_packet_add_side_data(pkt, AV_PKT_DATA_STRINGS_METADATA, metadata_dict_packed, metadata_dict_size);
 
             return 0;
-        }
-        if (cur->is_restart_needed) {
-            cur->cur_seg_offset = 0;
-            cur->init_sec_buf_read_offset = 0;
-            if (cur->input)
-                ff_format_io_close(cur->parent, &cur->input);
-            ret = reopen_demux_for_component(s, cur);
-            cur->is_restart_needed = 0;
         }
     }
 
@@ -2542,7 +2622,7 @@ static const AVOption dash_options[] = {
 
     // Updated Patch Method Options.
     { "live_start_index", "segment index to start live streams at (negative values are from the end)", OFFSET(live_start_index), AV_OPT_TYPE_INT, {.i64 = 0}, INT_MIN, INT_MAX, FLAGS},
-  
+
     {NULL}
 };
 
