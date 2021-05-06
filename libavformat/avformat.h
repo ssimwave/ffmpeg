@@ -1914,6 +1914,14 @@ typedef struct AVFormatContext {
      * @see skip_estimate_duration_from_pts
      */
     int64_t duration_probesize;
+
+    /**
+     * SSIMWAVE
+     * Callback to notify clients for ABR formats when an HTTP response has been received
+     */
+    void (*http_response_code_callback)(void* opaque, const int* av_stream_ids, size_t num_av_stream_ids,
+                                        const char* url, const char* method, int response_code);
+    void* http_response_code_callback_context;
 } AVFormatContext;
 
 /**
