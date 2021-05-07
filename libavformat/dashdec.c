@@ -33,13 +33,6 @@
 #define MAX_MANIFEST_SIZE 50 * 1024
 #define DEFAULT_MANIFEST_SIZE 8 * 1024
 
-//
-// SSIMWAVE SPECIFIC BUGFIX/FEATURE FLAGS
-//
-#define SSIMWAVE_OFFSET_SEQ_NO 1
-#define SSIMWAVE_MOVE_REP_TIMESTAMP 1
-//#define SSIMWAVE_CALC_CUR_SEG_NO_SELECT_FIRST 1
-//#define SSIMWAVE_GET_FRAGMENT_USE_LIVE_START_INDEX 1
 
 struct fragment {
     int64_t url_offset;
@@ -210,6 +203,8 @@ typedef struct DASHContext {
 // SSIMWAVE ADDITIONS
     uint32_t max_segment_duration;
     int live_start_index;
+    int use_legacy_live_segment_selection;
+    int use_timeline_segment_offset_correction;
 // END SSIMWAVE ADDITIONS
     int is_live;
 
@@ -314,22 +309,18 @@ static uint32_t get_duration_insec(AVFormatContext *s, const char *duration)
     return  ((days * 24 + hours) * 60 + mins) * 60 + secs;
 }
 
-static int64_t get_segment_start_time_based_on_timeline(struct representation *pls, int64_t cur_seq_no)
+static int64_t get_segment_start_time_based_on_timeline(const DASHContext *c, struct representation *pls, int64_t cur_seq_no)
 {
     int64_t start_time = 0;
     int64_t i = 0;
     int64_t j = 0;
     int64_t num = 0;
 
-#ifdef SSIMWAVE_OFFSET_SEQ_NO
     if (pls->n_timelines) {
-        if (cur_seq_no > pls->first_seq_no) {
+        if (c->use_timeline_segment_offset_correction && (cur_seq_no > pls->first_seq_no)) {
             cur_seq_no -= pls->first_seq_no;
         }
-    }
-#endif  // SSIMWAVE_OFFSET_SEQ_NO
 
-    if (pls->n_timelines) {
         for (i = 0; i < pls->n_timelines; i++) {
             if (pls->timelines[i]->starttime > 0) {
                 start_time = pls->timelines[i]->starttime;
@@ -357,7 +348,7 @@ finish:
     return start_time;
 }
 
-static int64_t calc_next_seg_no_from_timelines(struct representation *pls, int64_t cur_time)
+static int64_t calc_next_seg_no_from_timelines(const DASHContext* c, struct representation *pls, int64_t cur_time)
 {
     int64_t i = 0;
     int64_t j = 0;
@@ -381,17 +372,16 @@ static int64_t calc_next_seg_no_from_timelines(struct representation *pls, int64
         num++;
     }
 
-#ifdef SSIMWAVE_OFFSET_SEQ_NO
-    return pls->first_seq_no;
-
-finish:
-    return num + pls->first_seq_no;
-#else
+    if (c->use_timeline_segment_offset_correction) {
+        return pls->first_seq_no;
+    }
     return -1;
 
 finish:
+    if (c->use_timeline_segment_offset_correction) {
+        return num + pls->first_seq_no;
+    }
     return num;
-#endif // SSIMWAVE_OFFSET_SEQ_NO
 }
 
 static void free_fragment(struct fragment **seg)
@@ -1495,18 +1485,14 @@ static int64_t calc_cur_seg_no(AVFormatContext *s, struct representation *pls)
             num = pls->first_seq_no;
         } else if (pls->n_timelines) {
             av_log(s, AV_LOG_TRACE, "in n_timelines mode\n");
-#ifdef SSIMWAVE_CALC_CUR_SEG_NO_SELECT_FIRST
-            num = pls->first_seq_no;
-#else
-            start_time_offset = get_segment_start_time_based_on_timeline(pls, 0xFFFFFFFF) - 60 * pls->fragment_timescale; // 60 seconds before end
-            num = calc_next_seg_no_from_timelines(pls, start_time_offset);
-#ifndef SSIMWAVE_OFFSET_SEQ_NO
-            if (num == -1)
-                num = pls->first_seq_no;
-            else
-                num += pls->first_seq_no;
-#endif  // SSIMWAVE_OFFSET_SEQ_NO
-#endif  // SSIMWAVE_CALC_CUR_SEG_NO_SELECT_FIRST
+            start_time_offset = get_segment_start_time_based_on_timeline(c, pls, 0xFFFFFFFF) - 60 * pls->fragment_timescale; // 60 seconds before end
+            num = calc_next_seg_no_from_timelines(c, pls, start_time_offset);
+            if (!c->use_timeline_segment_offset_correction) {
+                if (num == -1)
+                    num = pls->first_seq_no;
+                else
+                    num += pls->first_seq_no;
+            }
         } else if (pls->fragment_duration){
             av_log(s, AV_LOG_TRACE, "in fragment_duration mode fragment_timescale = %"PRId64", presentation_timeoffset = %"PRId64"\n", pls->fragment_timescale, pls->presentation_timeoffset);
             if (pls->presentation_timeoffset) {
@@ -1580,9 +1566,7 @@ static void move_timelines(struct representation *rep_src, struct representation
         rep_src->timelines = NULL;
         rep_src->n_timelines = 0;
         rep_dest->cur_seq_no = rep_src->cur_seq_no;
-#ifdef SSIMWAVE_MOVE_REP_TIMESTAMP
         rep_dest->cur_timestamp = rep_src->cur_timestamp;
-#endif
     }
 }
 
@@ -1600,9 +1584,7 @@ static void move_segments(struct representation *rep_src, struct representation 
         rep_dest->last_seq_no = calc_max_seg_no(rep_dest, c);
         rep_src->fragments = NULL;
         rep_src->n_fragments = 0;
-#ifdef SSIMWAVE_MOVE_REP_TIMESTAMP
         rep_dest->cur_timestamp = rep_src->cur_timestamp;
-#endif
     }
 }
 
@@ -1655,9 +1637,9 @@ static int refresh_manifest(AVFormatContext *s)
         struct representation *ccur_video = c->videos[i];
         if (cur_video->timelines) {
             // calc current time
-            int64_t currentTime = get_segment_start_time_based_on_timeline(cur_video, cur_video->cur_seq_no) / cur_video->fragment_timescale;
+            int64_t currentTime = get_segment_start_time_based_on_timeline(c, cur_video, cur_video->cur_seq_no) / cur_video->fragment_timescale;
             // update segments
-            ccur_video->cur_seq_no = calc_next_seg_no_from_timelines(ccur_video, currentTime * cur_video->fragment_timescale - 1);
+            ccur_video->cur_seq_no = calc_next_seg_no_from_timelines(c, ccur_video, currentTime * cur_video->fragment_timescale - 1);
             if (ccur_video->cur_seq_no >= 0) {
                 move_timelines(ccur_video, cur_video, c);
             }
@@ -1671,9 +1653,9 @@ static int refresh_manifest(AVFormatContext *s)
         struct representation *ccur_audio = c->audios[i];
         if (cur_audio->timelines) {
             // calc current time
-            int64_t currentTime = get_segment_start_time_based_on_timeline(cur_audio, cur_audio->cur_seq_no) / cur_audio->fragment_timescale;
+            int64_t currentTime = get_segment_start_time_based_on_timeline(c, cur_audio, cur_audio->cur_seq_no) / cur_audio->fragment_timescale;
             // update segments
-            ccur_audio->cur_seq_no = calc_next_seg_no_from_timelines(ccur_audio, currentTime * cur_audio->fragment_timescale - 1);
+            ccur_audio->cur_seq_no = calc_next_seg_no_from_timelines(c, ccur_audio, currentTime * cur_audio->fragment_timescale - 1);
             if (ccur_audio->cur_seq_no >= 0) {
                 move_timelines(ccur_audio, cur_audio, c);
             }
@@ -1736,9 +1718,8 @@ static struct fragment *get_current_fragment(struct representation *pls)
         }
     }
     if (c->is_live) {
-#ifdef SSIMWAVE_GET_FRAGMENT_USE_LIVE_START_INDEX
         // SSIMWAVE CODE
-        while (!(ff_check_interrupt(c->interrupt_callback))) {
+        while (c->use_legacy_live_segment_selection && !(ff_check_interrupt(c->interrupt_callback))) {
             int64_t min_seq_no = calc_min_seg_no(pls->parent, pls);
             int64_t max_seq_no = calc_max_seg_no(pls, c);
 
@@ -1779,7 +1760,7 @@ static struct fragment *get_current_fragment(struct representation *pls)
             }
             break;
         } // END SSIMWAVE CODE
-#else
+
         min_seq_no = calc_min_seg_no(pls->parent, pls);
         max_seq_no = calc_max_seg_no(pls, c);
 
@@ -1792,7 +1773,6 @@ static struct fragment *get_current_fragment(struct representation *pls)
         } else if (pls->cur_seq_no > max_seq_no) {
             av_log(pls->parent, AV_LOG_VERBOSE, "new fragment: min[%"PRId64"] max[%"PRId64"], playlist %d\n", min_seq_no, max_seq_no, (int)pls->rep_idx);
         }
-#endif
         seg = av_mallocz(sizeof(struct fragment));
         if (!seg) {
             return NULL;
@@ -1808,7 +1788,7 @@ static struct fragment *get_current_fragment(struct representation *pls)
         if (!tmpfilename) {
             return NULL;
         }
-        ff_dash_fill_tmpl_params(tmpfilename, c->max_url_size, pls->url_template, 0, pls->cur_seq_no, 0, get_segment_start_time_based_on_timeline(pls, pls->cur_seq_no));
+        ff_dash_fill_tmpl_params(tmpfilename, c->max_url_size, pls->url_template, 0, pls->cur_seq_no, 0, get_segment_start_time_based_on_timeline(c, pls, pls->cur_seq_no));
         seg->url = av_strireplace(pls->url_template, pls->url_template, tmpfilename);
         if (!seg->url) {
             av_log(pls->parent, AV_LOG_WARNING, "Unable to resolve template url '%s', try to use origin template\n", pls->url_template);
@@ -2587,8 +2567,12 @@ static const AVOption dash_options[] = {
         {.str = "aac,m4a,m4s,m4v,mov,mp4,webm,ts"},
         INT_MIN, INT_MAX, FLAGS},
 
-    // Updated Patch Method Options.
+    // SSIMWAVE specific options
     { "live_start_index", "segment index to start live streams at (negative values are from the end)", OFFSET(live_start_index), AV_OPT_TYPE_INT, {.i64 = 0}, INT_MIN, INT_MAX, FLAGS},
+    { "use_legacy_live_segment_selection", "Use legacy live segment selection",
+        OFFSET(use_legacy_live_segment_selection), AV_OPT_TYPE_BOOL, {.i64 = 0}, 0, 1, FLAGS},
+    { "use_timeline_segment_offset_correction", "Use patch for timeline segment selection",
+        OFFSET(use_timeline_segment_offset_correction), AV_OPT_TYPE_BOOL, {.i64 = 1}, 0, 1, FLAGS},
 
     {NULL}
 };
