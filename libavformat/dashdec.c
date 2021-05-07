@@ -30,6 +30,9 @@
 
 #define INITIAL_BUFFER_SIZE 32768
 #define MAX_FIELD_LEN 64
+#define MAX_MANIFEST_SIZE 50 * 1024
+#define DEFAULT_MANIFEST_SIZE 8 * 1024
+
 
 struct fragment {
     int64_t url_offset;
@@ -135,16 +138,17 @@ struct representation {
 /******************************************************/
 
     int fix_multiple_stsd_order;
+
     /**
      *  record the sequence number of the first segment
-     *  in current timeline. 
-     *  Since the problem mpd availabilityStartTime is UTC epoch 
+     *  in current timeline.
+     *  Since the problem mpd availabilityStartTime is UTC epoch
      *  starting time, the cur_seq_no is already big number
-     *  get_fragment_start_time use local counter to compare 
-     *  with cur_seq_no which then blow up the result, it always 
+     *  get_fragment_start_time use local counter to compare
+     *  with cur_seq_no which then blow up the result, it always
      *  return the last segment timestamp in the timeline.
      *  Use this temporary variable to track the first seq_no.
-     */ 
+     */
 
     int64_t first_seq_no_in_representation;
 
@@ -199,6 +203,8 @@ typedef struct DASHContext {
 // SSIMWAVE ADDITIONS
     uint32_t max_segment_duration;
     int live_start_index;
+    int use_legacy_live_segment_selection;
+    int use_timeline_segment_offset_correction;
 // END SSIMWAVE ADDITIONS
     int is_live;
 
@@ -303,7 +309,7 @@ static uint32_t get_duration_insec(AVFormatContext *s, const char *duration)
     return  ((days * 24 + hours) * 60 + mins) * 60 + secs;
 }
 
-static int64_t get_segment_start_time_based_on_timeline(struct representation *pls, int64_t cur_seq_no)
+static int64_t get_segment_start_time_based_on_timeline(const DASHContext *c, struct representation *pls, int64_t cur_seq_no)
 {
     int64_t start_time = 0;
     int64_t i = 0;
@@ -311,6 +317,10 @@ static int64_t get_segment_start_time_based_on_timeline(struct representation *p
     int64_t num = 0;
 
     if (pls->n_timelines) {
+        if (c->use_timeline_segment_offset_correction && (cur_seq_no > pls->first_seq_no)) {
+            cur_seq_no -= pls->first_seq_no;
+        }
+
         for (i = 0; i < pls->n_timelines; i++) {
             if (pls->timelines[i]->starttime > 0) {
                 start_time = pls->timelines[i]->starttime;
@@ -338,7 +348,7 @@ finish:
     return start_time;
 }
 
-static int64_t calc_next_seg_no_from_timelines(struct representation *pls, int64_t cur_time)
+static int64_t calc_next_seg_no_from_timelines(const DASHContext* c, struct representation *pls, int64_t cur_time)
 {
     int64_t i = 0;
     int64_t j = 0;
@@ -362,9 +372,15 @@ static int64_t calc_next_seg_no_from_timelines(struct representation *pls, int64
         num++;
     }
 
+    if (c->use_timeline_segment_offset_correction) {
+        return pls->first_seq_no;
+    }
     return -1;
 
 finish:
+    if (c->use_timeline_segment_offset_correction) {
+        return num + pls->first_seq_no;
+    }
     return num;
 }
 
@@ -932,6 +948,7 @@ static int parse_manifest_representation(AVFormatContext *s, const char *url,
             ret = AVERROR(ENOMEM);
             goto end;
         }
+        rep->parent = s;
         representation_segmenttemplate_node = find_child_node_by_name(representation_node, "SegmentTemplate");
         representation_baseurl_node = find_child_node_by_name(representation_node, "BaseURL");
         representation_segmentlist_node = find_child_node_by_name(representation_node, "SegmentList");
@@ -1004,7 +1021,7 @@ static int parse_manifest_representation(AVFormatContext *s, const char *url,
                 xmlFree(timescale_val);
             }
             if (startnumber_val) {
-                rep->first_seq_no = (int64_t) strtoll(startnumber_val, NULL, 10);
+                rep->start_number = rep->first_seq_no = (int64_t) strtoll(startnumber_val, NULL, 10);
                 av_log(s, AV_LOG_TRACE, "rep->first_seq_no = [%"PRId64"]\n", rep->first_seq_no);
                 xmlFree(startnumber_val);
             }
@@ -1062,6 +1079,7 @@ static int parse_manifest_representation(AVFormatContext *s, const char *url,
 
             duration_val = get_val_from_nodes_tab(segmentlists_tab, 3, "duration");
             timescale_val = get_val_from_nodes_tab(segmentlists_tab, 3, "timescale");
+            startnumber_val = get_val_from_nodes_tab(segmentlists_tab, 4, "startNumber");
             if (duration_val) {
                 rep->fragment_duration = (int64_t) strtoll(duration_val, NULL, 10);
                 av_log(s, AV_LOG_TRACE, "rep->fragment_duration = [%"PRId64"]\n", rep->fragment_duration);
@@ -1072,6 +1090,12 @@ static int parse_manifest_representation(AVFormatContext *s, const char *url,
                 av_log(s, AV_LOG_TRACE, "rep->fragment_timescale = [%"PRId64"]\n", rep->fragment_timescale);
                 xmlFree(timescale_val);
             }
+            if (startnumber_val) {
+                rep->start_number = rep->first_seq_no = (int64_t) strtoll(startnumber_val, NULL, 10);
+                av_log(s, AV_LOG_TRACE, "rep->first_seq_no = [%"PRId64"]\n", rep->first_seq_no);
+                xmlFree(startnumber_val);
+            }
+
             fragmenturl_node = xmlFirstElementChild(representation_segmentlist_node);
             while (fragmenturl_node) {
                 ret = parse_manifest_segmenturlnode(s, rep, fragmenturl_node,
@@ -1267,7 +1291,7 @@ static int parse_manifest(AVFormatContext *s, const char *url, AVIOContext *in)
     int close_in = 0;
     uint8_t *new_url = NULL;
     int64_t filesize = 0;
-    char *buffer = NULL;
+    AVBPrint buf;
     AVDictionary *opts = NULL;
     xmlDoc *doc = NULL;
     xmlNodePtr root_element = NULL;
@@ -1301,24 +1325,23 @@ static int parse_manifest(AVFormatContext *s, const char *url, AVIOContext *in)
     }
 
     filesize = avio_size(in);
-    if (filesize <= 0) {
-        filesize = 8 * 1024;
+    if (filesize > MAX_MANIFEST_SIZE) {
+        av_log(s, AV_LOG_ERROR, "Manifest too large: %"PRId64"\n", filesize);
+        return AVERROR_INVALIDDATA;
     }
 
-    buffer = av_mallocz(filesize);
-    if (!buffer) {
-        av_free(c->base_url);
-        return AVERROR(ENOMEM);
-    }
+    av_bprint_init(&buf, (filesize > 0) ? filesize + 1 : DEFAULT_MANIFEST_SIZE, AV_BPRINT_SIZE_UNLIMITED);
 
-    filesize = avio_read(in, buffer, filesize);
-    if (filesize <= 0) {
-        av_log(s, AV_LOG_ERROR, "Unable to read to offset '%s'\n", url);
-        ret = AVERROR_INVALIDDATA;
+    if ((ret = avio_read_to_bprint(in, &buf, MAX_MANIFEST_SIZE)) < 0 ||
+        !avio_feof(in) ||
+        (filesize = buf.len) == 0) {
+        av_log(s, AV_LOG_ERROR, "Unable to read to manifest '%s'\n", url);
+        if (ret == 0)
+            ret = AVERROR_INVALIDDATA;
     } else {
         LIBXML_TEST_VERSION
 
-            doc = xmlReadMemory(buffer, filesize, c->base_url, NULL, 0);
+        doc = xmlReadMemory(buf.str, filesize, c->base_url, NULL, 0);
         root_element = xmlDocGetRootElement(doc);
         node = root_element;
 
@@ -1443,7 +1466,7 @@ cleanup:
     }
 
     av_free(new_url);
-    av_free(buffer);
+    av_bprint_finalize(&buf, NULL);
     if (close_in) {
         avio_close(in);
     }
@@ -1462,12 +1485,14 @@ static int64_t calc_cur_seg_no(AVFormatContext *s, struct representation *pls)
             num = pls->first_seq_no;
         } else if (pls->n_timelines) {
             av_log(s, AV_LOG_TRACE, "in n_timelines mode\n");
-            start_time_offset = get_segment_start_time_based_on_timeline(pls, 0xFFFFFFFF) - 60 * pls->fragment_timescale; // 60 seconds before end
-            num = calc_next_seg_no_from_timelines(pls, start_time_offset);
-            if (num == -1)
-                num = pls->first_seq_no;
-            else
-                num += pls->first_seq_no;
+            start_time_offset = get_segment_start_time_based_on_timeline(c, pls, 0xFFFFFFFF) - 60 * pls->fragment_timescale; // 60 seconds before end
+            num = calc_next_seg_no_from_timelines(c, pls, start_time_offset);
+            if (!c->use_timeline_segment_offset_correction) {
+                if (num == -1)
+                    num = pls->first_seq_no;
+                else
+                    num += pls->first_seq_no;
+            }
         } else if (pls->fragment_duration){
             av_log(s, AV_LOG_TRACE, "in fragment_duration mode fragment_timescale = %"PRId64", presentation_timeoffset = %"PRId64"\n", pls->fragment_timescale, pls->presentation_timeoffset);
             if (pls->presentation_timeoffset) {
@@ -1535,12 +1560,13 @@ static void move_timelines(struct representation *rep_src, struct representation
         rep_dest->timelines    = rep_src->timelines;
         rep_dest->n_timelines  = rep_src->n_timelines;
         rep_dest->first_seq_no = rep_src->first_seq_no;
-        
+
         rep_dest->last_seq_no = calc_max_seg_no(rep_dest, c);
-        
+
         rep_src->timelines = NULL;
         rep_src->n_timelines = 0;
         rep_dest->cur_seq_no = rep_src->cur_seq_no;
+        rep_dest->cur_timestamp = rep_src->cur_timestamp;
     }
 }
 
@@ -1558,6 +1584,7 @@ static void move_segments(struct representation *rep_src, struct representation 
         rep_dest->last_seq_no = calc_max_seg_no(rep_dest, c);
         rep_src->fragments = NULL;
         rep_src->n_fragments = 0;
+        rep_dest->cur_timestamp = rep_src->cur_timestamp;
     }
 }
 
@@ -1610,9 +1637,9 @@ static int refresh_manifest(AVFormatContext *s)
         struct representation *ccur_video = c->videos[i];
         if (cur_video->timelines) {
             // calc current time
-            int64_t currentTime = get_segment_start_time_based_on_timeline(cur_video, cur_video->cur_seq_no) / cur_video->fragment_timescale;
+            int64_t currentTime = get_segment_start_time_based_on_timeline(c, cur_video, cur_video->cur_seq_no) / cur_video->fragment_timescale;
             // update segments
-            ccur_video->cur_seq_no = calc_next_seg_no_from_timelines(ccur_video, currentTime * cur_video->fragment_timescale - 1);
+            ccur_video->cur_seq_no = calc_next_seg_no_from_timelines(c, ccur_video, currentTime * cur_video->fragment_timescale - 1);
             if (ccur_video->cur_seq_no >= 0) {
                 move_timelines(ccur_video, cur_video, c);
             }
@@ -1626,9 +1653,9 @@ static int refresh_manifest(AVFormatContext *s)
         struct representation *ccur_audio = c->audios[i];
         if (cur_audio->timelines) {
             // calc current time
-            int64_t currentTime = get_segment_start_time_based_on_timeline(cur_audio, cur_audio->cur_seq_no) / cur_audio->fragment_timescale;
+            int64_t currentTime = get_segment_start_time_based_on_timeline(c, cur_audio, cur_audio->cur_seq_no) / cur_audio->fragment_timescale;
             // update segments
-            ccur_audio->cur_seq_no = calc_next_seg_no_from_timelines(ccur_audio, currentTime * cur_audio->fragment_timescale - 1);
+            ccur_audio->cur_seq_no = calc_next_seg_no_from_timelines(c, ccur_audio, currentTime * cur_audio->fragment_timescale - 1);
             if (ccur_audio->cur_seq_no >= 0) {
                 move_timelines(ccur_audio, cur_audio, c);
             }
@@ -1692,7 +1719,7 @@ static struct fragment *get_current_fragment(struct representation *pls)
     }
     if (c->is_live) {
         // SSIMWAVE CODE
-        while (!(ff_check_interrupt(c->interrupt_callback))) {
+        while (c->use_legacy_live_segment_selection && !(ff_check_interrupt(c->interrupt_callback))) {
             int64_t min_seq_no = calc_min_seg_no(pls->parent, pls);
             int64_t max_seq_no = calc_max_seg_no(pls, c);
 
@@ -1761,7 +1788,7 @@ static struct fragment *get_current_fragment(struct representation *pls)
         if (!tmpfilename) {
             return NULL;
         }
-        ff_dash_fill_tmpl_params(tmpfilename, c->max_url_size, pls->url_template, 0, pls->cur_seq_no, 0, get_segment_start_time_based_on_timeline(pls, pls->cur_seq_no));
+        ff_dash_fill_tmpl_params(tmpfilename, c->max_url_size, pls->url_template, 0, pls->cur_seq_no, 0, get_segment_start_time_based_on_timeline(c, pls, pls->cur_seq_no));
         seg->url = av_strireplace(pls->url_template, pls->url_template, tmpfilename);
         if (!seg->url) {
             av_log(pls->parent, AV_LOG_WARNING, "Unable to resolve template url '%s', try to use origin template\n", pls->url_template);
@@ -1985,7 +2012,7 @@ static int save_avio_options(AVFormatContext *s)
 {
     DASHContext *c = s->priv_data;
     const char *opts[] = {
-        "headers", "user_agent", "cookies", "http_proxy", "referer", "rw_timeout", NULL };
+        "headers", "user_agent", "cookies", "http_proxy", "referer", "rw_timeout", "icy", NULL };
     const char **opt = opts;
     uint8_t *buf = NULL;
     int ret = 0;
@@ -2537,12 +2564,16 @@ static int dash_probe(const AVProbeData *p)
 static const AVOption dash_options[] = {
     {"allowed_extensions", "List of file extensions that dash is allowed to access",
         OFFSET(allowed_extensions), AV_OPT_TYPE_STRING,
-        {.str = "aac,m4a,m4s,m4v,mov,mp4,webm"},
+        {.str = "aac,m4a,m4s,m4v,mov,mp4,webm,ts"},
         INT_MIN, INT_MAX, FLAGS},
 
-    // Updated Patch Method Options.
+    // SSIMWAVE specific options
     { "live_start_index", "segment index to start live streams at (negative values are from the end)", OFFSET(live_start_index), AV_OPT_TYPE_INT, {.i64 = 0}, INT_MIN, INT_MAX, FLAGS},
-  
+    { "use_legacy_live_segment_selection", "Use legacy live segment selection",
+        OFFSET(use_legacy_live_segment_selection), AV_OPT_TYPE_BOOL, {.i64 = 0}, 0, 1, FLAGS},
+    { "use_timeline_segment_offset_correction", "Use patch for timeline segment selection",
+        OFFSET(use_timeline_segment_offset_correction), AV_OPT_TYPE_BOOL, {.i64 = 1}, 0, 1, FLAGS},
+
     {NULL}
 };
 
