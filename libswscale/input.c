@@ -165,6 +165,7 @@ static av_always_inline void rgb48ToUV_c_template(uint16_t *dstU,
     }
 }
 
+// Dummy change!!!
 static av_always_inline void rgb48ToUV_half_c_template(uint16_t *dstU,
                                                        uint16_t *dstV,
                                                        const uint16_t *src1,
