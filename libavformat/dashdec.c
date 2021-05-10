@@ -155,7 +155,6 @@ typedef struct DASHContext {
     char *adaptionset_lang;
 
 // SSIMWAVE ADDITIONS
-    int use_legacy_live_segment_selection;
     int use_timeline_segment_offset_correction;
 // END SSIMWAVE ADDITIONS
 
@@ -2454,9 +2453,6 @@ static const AVOption dash_options[] = {
         INT_MIN, INT_MAX, FLAGS},
 
     // SSIMWAVE specific options
-    { "live_start_index", "segment index to start live streams at (negative values are from the end)", OFFSET(live_start_index), AV_OPT_TYPE_INT, {.i64 = 0}, INT_MIN, INT_MAX, FLAGS},
-    { "use_legacy_live_segment_selection", "Use legacy live segment selection",
-        OFFSET(use_legacy_live_segment_selection), AV_OPT_TYPE_BOOL, {.i64 = 0}, 0, 1, FLAGS},
     { "use_timeline_segment_offset_correction", "Use patch for timeline segment selection",
         OFFSET(use_timeline_segment_offset_correction), AV_OPT_TYPE_BOOL, {.i64 = 1}, 0, 1, FLAGS},
 
