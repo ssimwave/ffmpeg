@@ -157,6 +157,7 @@ typedef struct DASHContext {
 
 // SSIMWAVE ADDITIONS
     int use_timeline_segment_offset_correction;
+    int fetch_completed_segments_only;
 // END SSIMWAVE ADDITIONS
 
     int is_live;
@@ -270,7 +271,7 @@ static int64_t get_segment_start_time_based_on_timeline(const DASHContext *c, st
     int64_t num = 0;
 
     if (pls->n_timelines) {
-        if (c->use_timeline_segment_offset_correction && (cur_seq_no > pls->first_seq_no)) {
+        if (c->use_timeline_segment_offset_correction && (cur_seq_no >= pls->first_seq_no)) {
             cur_seq_no -= pls->first_seq_no;
         }
 
@@ -1431,8 +1432,14 @@ static int64_t calc_cur_seg_no(AVFormatContext *s, struct representation *pls)
                 } else {
                     num = pls->first_seq_no + (((c->publish_time - c->time_shift_buffer_depth + pls->fragment_duration) - c->suggested_presentation_delay) * pls->fragment_timescale) / pls->fragment_duration;
                 }
+                if ((num > pls->first_seq_no) && (0 == c->time_shift_buffer_depth && 0 == c->suggested_presentation_delay) && c->fetch_completed_segments_only) {
+                    num -= 1;
+                }
             } else {
                 num = pls->first_seq_no + (((get_current_time_in_sec() - c->availability_start_time) - c->suggested_presentation_delay) * pls->fragment_timescale) / pls->fragment_duration;
+                if ((num > pls->first_seq_no) && (0 == c->suggested_presentation_delay) && c->fetch_completed_segments_only) {
+                    num -= 1;
+                }
             }
         }
     } else {
@@ -1449,6 +1456,9 @@ static int64_t calc_min_seg_no(AVFormatContext *s, struct representation *pls)
     if (c->is_live && pls->fragment_duration) {
         av_log(s, AV_LOG_TRACE, "in live mode\n");
         num = pls->first_seq_no + (((get_current_time_in_sec() - c->availability_start_time) - c->time_shift_buffer_depth) * pls->fragment_timescale) / pls->fragment_duration;
+        if ((num > pls->first_seq_no) && (0 == c->time_shift_buffer_depth) && c->fetch_completed_segments_only) {
+            num -= 1;
+        }
     } else {
         num = pls->first_seq_no;
     }
@@ -1474,6 +1484,9 @@ static int64_t calc_max_seg_no(struct representation *pls, DASHContext *c)
         }
     } else if (c->is_live && pls->fragment_duration) {
         num = pls->first_seq_no + (((get_current_time_in_sec() - c->availability_start_time)) * pls->fragment_timescale)  / pls->fragment_duration;
+        if ((num > pls->first_seq_no) && c->fetch_completed_segments_only) {
+            num -= 1;
+        }
     } else if (pls->fragment_duration) {
         num = pls->first_seq_no + av_rescale_rnd(1, c->media_presentation_duration * pls->fragment_timescale, pls->fragment_duration, AV_ROUND_UP);
     }
@@ -1854,7 +1867,13 @@ restart:
                 goto end;
             }
             av_log(v->parent, AV_LOG_WARNING, "Failed to open fragment of playlist\n");
-            v->cur_seq_no++;
+            if (!c->is_live) {
+                /* For a live playlist, prevent incrementing the segment number since we could get too far ahead
+                 * what the content provider will be able to provide.  Calling get_current_fragment() above will
+                 * refresh the manifest where applicable and handle if the current segment number falls too far behind
+                 * during retries. */
+                v->cur_seq_no++;
+            }
             goto restart;
         }
     }
@@ -2468,6 +2487,8 @@ static const AVOption dash_options[] = {
     // SSIMWAVE specific options
     { "use_timeline_segment_offset_correction", "Use patch for timeline segment selection",
         OFFSET(use_timeline_segment_offset_correction), AV_OPT_TYPE_BOOL, {.i64 = 1}, 0, 1, FLAGS},
+    { "fetch_completed_segments_only", "Only fetch completed segments from the content provider",
+        OFFSET(fetch_completed_segments_only), AV_OPT_TYPE_BOOL, {.i64 = 1}, 0, 1, FLAGS},
 
     {NULL}
 };
