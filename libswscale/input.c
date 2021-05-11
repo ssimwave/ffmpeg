@@ -35,8 +35,6 @@
 #include "swscale.h"
 #include "swscale_internal.h"
 
-#define input_pixel(pos) (isBE(origin) ? AV_RB16(pos) : AV_RL16(pos))
-
 #define r ((origin == AV_PIX_FMT_BGR48BE || origin == AV_PIX_FMT_BGR48LE || origin == AV_PIX_FMT_BGRA64BE || origin == AV_PIX_FMT_BGRA64LE) ? b_r : r_b)
 #define b ((origin == AV_PIX_FMT_BGR48BE || origin == AV_PIX_FMT_BGR48LE || origin == AV_PIX_FMT_BGRA64BE || origin == AV_PIX_FMT_BGRA64LE) ? r_b : b_r)
 
@@ -46,12 +44,23 @@ rgb64ToY_c_template(uint16_t *dst, const uint16_t *src, int width,
 {
     int32_t ry = rgb2yuv[RY_IDX], gy = rgb2yuv[GY_IDX], by = rgb2yuv[BY_IDX];
     int i;
-    for (i = 0; i < width; i++) {
-        unsigned int r_b = input_pixel(&src[i*4+0]);
-        unsigned int   g = input_pixel(&src[i*4+1]);
-        unsigned int b_r = input_pixel(&src[i*4+2]);
+    if (isBE(origin)) {
+        for (i = 0; i < width; i++) {
+            unsigned int r_b = AV_RB16(&src[i*4+0]);
+            unsigned int   g = AV_RB16(&src[i*4+1]);
+            unsigned int b_r = AV_RB16(&src[i*4+2]);
 
-        dst[i] = (ry*r + gy*g + by*b + (0x2001<<(RGB2YUV_SHIFT-1))) >> RGB2YUV_SHIFT;
+            dst[i] = (ry*r + gy*g + by*b + (0x2001<<(RGB2YUV_SHIFT-1))) >> RGB2YUV_SHIFT;
+        }
+    }
+    else {
+        for (i = 0; i < width; i++) {
+            unsigned int r_b = AV_RL16(&src[i*4+0]);
+            unsigned int   g = AV_RL16(&src[i*4+1]);
+            unsigned int b_r = AV_RL16(&src[i*4+2]);
+
+            dst[i] = (ry*r + gy*g + by*b + (0x2001<<(RGB2YUV_SHIFT-1))) >> RGB2YUV_SHIFT;
+        }
     }
 }
 
@@ -64,13 +73,25 @@ rgb64ToUV_c_template(uint16_t *dstU, uint16_t *dstV,
     int32_t ru = rgb2yuv[RU_IDX], gu = rgb2yuv[GU_IDX], bu = rgb2yuv[BU_IDX];
     int32_t rv = rgb2yuv[RV_IDX], gv = rgb2yuv[GV_IDX], bv = rgb2yuv[BV_IDX];
     av_assert1(src1==src2);
-    for (i = 0; i < width; i++) {
-        int r_b = input_pixel(&src1[i*4+0]);
-        int   g = input_pixel(&src1[i*4+1]);
-        int b_r = input_pixel(&src1[i*4+2]);
+    if (isBE(origin)) {
+        for (i = 0; i < width; i++) {
+            int r_b = AV_RB16(&src1[i*4+0]);
+            int   g = AV_RB16(&src1[i*4+1]);
+            int b_r = AV_RB16(&src1[i*4+2]);
 
-        dstU[i] = (ru*r + gu*g + bu*b + (0x10001<<(RGB2YUV_SHIFT-1))) >> RGB2YUV_SHIFT;
-        dstV[i] = (rv*r + gv*g + bv*b + (0x10001<<(RGB2YUV_SHIFT-1))) >> RGB2YUV_SHIFT;
+            dstU[i] = (ru*r + gu*g + bu*b + (0x10001<<(RGB2YUV_SHIFT-1))) >> RGB2YUV_SHIFT;
+            dstV[i] = (rv*r + gv*g + bv*b + (0x10001<<(RGB2YUV_SHIFT-1))) >> RGB2YUV_SHIFT;
+        }
+    }
+    else {
+        for (i = 0; i < width; i++) {
+            int r_b = AV_RL16(&src1[i*4+0]);
+            int   g = AV_RL16(&src1[i*4+1]);
+            int b_r = AV_RL16(&src1[i*4+2]);
+
+            dstU[i] = (ru*r + gu*g + bu*b + (0x10001<<(RGB2YUV_SHIFT-1))) >> RGB2YUV_SHIFT;
+            dstV[i] = (rv*r + gv*g + bv*b + (0x10001<<(RGB2YUV_SHIFT-1))) >> RGB2YUV_SHIFT;
+        }
     }
 }
 
@@ -83,13 +104,25 @@ rgb64ToUV_half_c_template(uint16_t *dstU, uint16_t *dstV,
     int32_t ru = rgb2yuv[RU_IDX], gu = rgb2yuv[GU_IDX], bu = rgb2yuv[BU_IDX];
     int32_t rv = rgb2yuv[RV_IDX], gv = rgb2yuv[GV_IDX], bv = rgb2yuv[BV_IDX];
     av_assert1(src1==src2);
-    for (i = 0; i < width; i++) {
-        int r_b = (input_pixel(&src1[8 * i + 0]) + input_pixel(&src1[8 * i + 4]) + 1) >> 1;
-        int   g = (input_pixel(&src1[8 * i + 1]) + input_pixel(&src1[8 * i + 5]) + 1) >> 1;
-        int b_r = (input_pixel(&src1[8 * i + 2]) + input_pixel(&src1[8 * i + 6]) + 1) >> 1;
+    if (isBE(origin)) {
+        for (i = 0; i < width; i++) {
+            int r_b = (AV_RB16(&src1[8 * i + 0]) + AV_RB16(&src1[8 * i + 4]) + 1) >> 1;
+            int   g = (AV_RB16(&src1[8 * i + 1]) + AV_RB16(&src1[8 * i + 5]) + 1) >> 1;
+            int b_r = (AV_RB16(&src1[8 * i + 2]) + AV_RB16(&src1[8 * i + 6]) + 1) >> 1;
 
-        dstU[i]= (ru*r + gu*g + bu*b + (0x10001<<(RGB2YUV_SHIFT-1))) >> RGB2YUV_SHIFT;
-        dstV[i]= (rv*r + gv*g + bv*b + (0x10001<<(RGB2YUV_SHIFT-1))) >> RGB2YUV_SHIFT;
+            dstU[i]= (ru*r + gu*g + bu*b + (0x10001<<(RGB2YUV_SHIFT-1))) >> RGB2YUV_SHIFT;
+            dstV[i]= (rv*r + gv*g + bv*b + (0x10001<<(RGB2YUV_SHIFT-1))) >> RGB2YUV_SHIFT;
+        }
+    }
+    else {
+        for (i = 0; i < width; i++) {
+            int r_b = (AV_RL16(&src1[8 * i + 0]) + AV_RL16(&src1[8 * i + 4]) + 1) >> 1;
+            int   g = (AV_RL16(&src1[8 * i + 1]) + AV_RL16(&src1[8 * i + 5]) + 1) >> 1;
+            int b_r = (AV_RL16(&src1[8 * i + 2]) + AV_RL16(&src1[8 * i + 6]) + 1) >> 1;
+
+            dstU[i]= (ru*r + gu*g + bu*b + (0x10001<<(RGB2YUV_SHIFT-1))) >> RGB2YUV_SHIFT;
+            dstV[i]= (rv*r + gv*g + bv*b + (0x10001<<(RGB2YUV_SHIFT-1))) >> RGB2YUV_SHIFT;
+        }
     }
 }
 
@@ -134,12 +167,23 @@ static av_always_inline void rgb48ToY_c_template(uint16_t *dst,
 {
     int32_t ry = rgb2yuv[RY_IDX], gy = rgb2yuv[GY_IDX], by = rgb2yuv[BY_IDX];
     int i;
-    for (i = 0; i < width; i++) {
-        unsigned int r_b = input_pixel(&src[i * 3 + 0]);
-        unsigned int g   = input_pixel(&src[i * 3 + 1]);
-        unsigned int b_r = input_pixel(&src[i * 3 + 2]);
+    if (isBE(origin)) {
+        for (i = 0; i < width; i++) {
+            unsigned int r_b = AV_RB16(&src[i * 3 + 0]);
+            unsigned int g   = AV_RB16(&src[i * 3 + 1]);
+            unsigned int b_r = AV_RB16(&src[i * 3 + 2]);
 
-        dst[i] = (ry*r + gy*g + by*b + (0x2001 << (RGB2YUV_SHIFT - 1))) >> RGB2YUV_SHIFT;
+            dst[i] = (ry*r + gy*g + by*b + (0x2001 << (RGB2YUV_SHIFT - 1))) >> RGB2YUV_SHIFT;
+        }
+    }
+    else {
+        for (i = 0; i < width; i++) {
+            unsigned int r_b = AV_RL16(&src[i * 3 + 0]);
+            unsigned int g   = AV_RL16(&src[i * 3 + 1]);
+            unsigned int b_r = AV_RL16(&src[i * 3 + 2]);
+
+            dst[i] = (ry*r + gy*g + by*b + (0x2001 << (RGB2YUV_SHIFT - 1))) >> RGB2YUV_SHIFT;
+        }
     }
 }
 
@@ -155,13 +199,25 @@ static av_always_inline void rgb48ToUV_c_template(uint16_t *dstU,
     int32_t ru = rgb2yuv[RU_IDX], gu = rgb2yuv[GU_IDX], bu = rgb2yuv[BU_IDX];
     int32_t rv = rgb2yuv[RV_IDX], gv = rgb2yuv[GV_IDX], bv = rgb2yuv[BV_IDX];
     av_assert1(src1 == src2);
-    for (i = 0; i < width; i++) {
-        int r_b = input_pixel(&src1[i * 3 + 0]);
-        int g   = input_pixel(&src1[i * 3 + 1]);
-        int b_r = input_pixel(&src1[i * 3 + 2]);
+    if (isBE(origin)) {
+        for (i = 0; i < width; i++) {
+            int r_b = AV_RB16(&src1[i * 3 + 0]);
+            int g   = AV_RB16(&src1[i * 3 + 1]);
+            int b_r = AV_RB16(&src1[i * 3 + 2]);
 
-        dstU[i] = (ru*r + gu*g + bu*b + (0x10001 << (RGB2YUV_SHIFT - 1))) >> RGB2YUV_SHIFT;
-        dstV[i] = (rv*r + gv*g + bv*b + (0x10001 << (RGB2YUV_SHIFT - 1))) >> RGB2YUV_SHIFT;
+            dstU[i] = (ru*r + gu*g + bu*b + (0x10001 << (RGB2YUV_SHIFT - 1))) >> RGB2YUV_SHIFT;
+            dstV[i] = (rv*r + gv*g + bv*b + (0x10001 << (RGB2YUV_SHIFT - 1))) >> RGB2YUV_SHIFT;
+        }
+    }
+    else {
+        for (i = 0; i < width; i++) {
+            int r_b = AV_RL16(&src1[i * 3 + 0]);
+            int g   = AV_RL16(&src1[i * 3 + 1]);
+            int b_r = AV_RL16(&src1[i * 3 + 2]);
+
+            dstU[i] = (ru*r + gu*g + bu*b + (0x10001 << (RGB2YUV_SHIFT - 1))) >> RGB2YUV_SHIFT;
+            dstV[i] = (rv*r + gv*g + bv*b + (0x10001 << (RGB2YUV_SHIFT - 1))) >> RGB2YUV_SHIFT;
+        }
     }
 }
 
@@ -177,22 +233,36 @@ static av_always_inline void rgb48ToUV_half_c_template(uint16_t *dstU,
     int32_t ru = rgb2yuv[RU_IDX], gu = rgb2yuv[GU_IDX], bu = rgb2yuv[BU_IDX];
     int32_t rv = rgb2yuv[RV_IDX], gv = rgb2yuv[GV_IDX], bv = rgb2yuv[BV_IDX];
     av_assert1(src1 == src2);
-    for (i = 0; i < width; i++) {
-        int r_b = (input_pixel(&src1[6 * i + 0]) +
-                   input_pixel(&src1[6 * i + 3]) + 1) >> 1;
-        int g   = (input_pixel(&src1[6 * i + 1]) +
-                   input_pixel(&src1[6 * i + 4]) + 1) >> 1;
-        int b_r = (input_pixel(&src1[6 * i + 2]) +
-                   input_pixel(&src1[6 * i + 5]) + 1) >> 1;
+    if (isBE(origin)) {
+        for (i = 0; i < width; i++) {
+            int r_b = (AV_RB16(&src1[6 * i + 0]) +
+                       AV_RB16(&src1[6 * i + 3]) + 1) >> 1;
+            int g   = (AV_RB16(&src1[6 * i + 1]) +
+                       AV_RB16(&src1[6 * i + 4]) + 1) >> 1;
+            int b_r = (AV_RB16(&src1[6 * i + 2]) +
+                       AV_RB16(&src1[6 * i + 5]) + 1) >> 1;
 
-        dstU[i] = (ru*r + gu*g + bu*b + (0x10001 << (RGB2YUV_SHIFT - 1))) >> RGB2YUV_SHIFT;
-        dstV[i] = (rv*r + gv*g + bv*b + (0x10001 << (RGB2YUV_SHIFT - 1))) >> RGB2YUV_SHIFT;
+            dstU[i] = (ru*r + gu*g + bu*b + (0x10001 << (RGB2YUV_SHIFT - 1))) >> RGB2YUV_SHIFT;
+            dstV[i] = (rv*r + gv*g + bv*b + (0x10001 << (RGB2YUV_SHIFT - 1))) >> RGB2YUV_SHIFT;
+        }
+    }
+    else {
+        for (i = 0; i < width; i++) {
+            int r_b = (AV_RL16(&src1[6 * i + 0]) +
+                       AV_RL16(&src1[6 * i + 3]) + 1) >> 1;
+            int g   = (AV_RL16(&src1[6 * i + 1]) +
+                       AV_RL16(&src1[6 * i + 4]) + 1) >> 1;
+            int b_r = (AV_RL16(&src1[6 * i + 2]) +
+                       AV_RL16(&src1[6 * i + 5]) + 1) >> 1;
+
+            dstU[i] = (ru*r + gu*g + bu*b + (0x10001 << (RGB2YUV_SHIFT - 1))) >> RGB2YUV_SHIFT;
+            dstV[i] = (rv*r + gv*g + bv*b + (0x10001 << (RGB2YUV_SHIFT - 1))) >> RGB2YUV_SHIFT;
+        }
     }
 }
 
 #undef r
 #undef b
-#undef input_pixel
 
 #define rgb48funcs(pattern, BE_LE, origin)                              \
 static void pattern ## 48 ## BE_LE ## ToY_c(uint8_t *_dst,              \
@@ -241,14 +311,13 @@ rgb48funcs(rgb, BE, AV_PIX_FMT_RGB48BE)
 rgb48funcs(bgr, LE, AV_PIX_FMT_BGR48LE)
 rgb48funcs(bgr, BE, AV_PIX_FMT_BGR48BE)
 
-#define input_pixel(i) ((origin == AV_PIX_FMT_RGBA ||                      \
-                         origin == AV_PIX_FMT_BGRA ||                      \
-                         origin == AV_PIX_FMT_ARGB ||                      \
-                         origin == AV_PIX_FMT_ABGR)                        \
-                        ? AV_RN32A(&src[(i) * 4])                       \
-                        : (isBE(origin) ? AV_RB16(&src[(i) * 2])        \
-                                        : AV_RL16(&src[(i) * 2])))
-
+#define read_mode(origin) ((origin == AV_PIX_FMT_RGBA ||                 \
+                            origin == AV_PIX_FMT_BGRA ||                 \
+                            origin == AV_PIX_FMT_ARGB ||                 \
+                            origin == AV_PIX_FMT_ABGR)                   \
+                            ? 0                                          \
+                            : isBE(origin) ? 1                           \
+                            : 2)
 static av_always_inline void rgb16_32ToY_c_template(int16_t *dst,
                                                     const uint8_t *src,
                                                     int width,
@@ -264,14 +333,20 @@ static av_always_inline void rgb16_32ToY_c_template(int16_t *dst,
     const unsigned rnd = (32<<((S)-1)) + (1<<(S-7));
     int i;
 
-    for (i = 0; i < width; i++) {
-        int px = input_pixel(i) >> shp;
-        int b  = (px & maskb) >> shb;
-        int g  = (px & maskg) >> shg;
-        int r  = (px & maskr) >> shr;
-
-        dst[i] = (ry * r + gy * g + by * b + rnd) >> ((S)-6);
+    #define do_it(read)                                                  \
+        for (i = 0; i < width; i++) {                                    \
+            int px = read >> shp;                                        \
+            int b  = (px & maskb) >> shb;                                \
+            int g  = (px & maskg) >> shg;                                \
+            int r  = (px & maskr) >> shr;                                \
+            dst[i] = (ry * r + gy * g + by * b + rnd) >> ((S)-6);        \
+        }
+    switch (read_mode(origin)) {
+        case 0: do_it(AV_RN32A(&src[i * 4])); break;
+        case 1: do_it(AV_RB16(&src[i * 2])); break;
+        case 2: do_it(AV_RL16(&src[i * 2])); break;
     }
+    #undef do_it
 }
 
 static av_always_inline void rgb16_32ToUV_c_template(int16_t *dstU,
@@ -291,15 +366,23 @@ static av_always_inline void rgb16_32ToUV_c_template(int16_t *dstU,
     const unsigned rnd = (256u<<((S)-1)) + (1<<(S-7));
     int i;
 
-    for (i = 0; i < width; i++) {
-        int px = input_pixel(i) >> shp;
-        int b  = (px & maskb)   >> shb;
-        int g  = (px & maskg)   >> shg;
-        int r  = (px & maskr)   >> shr;
+    #define do_it(read)                                                   \
+        for (i = 0; i < width; i++) {                                     \
+            int px = read >> shp;                                         \
+            int b  = (px & maskb)   >> shb;                               \
+            int g  = (px & maskg)   >> shg;                               \
+            int r  = (px & maskr)   >> shr;                               \
+            dstU[i] = (ru * r + gu * g + bu * b + rnd) >> ((S)-6);        \
+            dstV[i] = (rv * r + gv * g + bv * b + rnd) >> ((S)-6);        \
+        }
 
-        dstU[i] = (ru * r + gu * g + bu * b + rnd) >> ((S)-6);
-        dstV[i] = (rv * r + gv * g + bv * b + rnd) >> ((S)-6);
+    switch (read_mode(origin)) {
+        case 0: do_it(AV_RN32A(&src[i * 4])); break;
+        case 1: do_it(AV_RB16(&src[i * 2])); break;
+        case 2: do_it(AV_RL16(&src[i * 2])); break;
     }
+
+    #undef do_it
 }
 
 static av_always_inline void rgb16_32ToUV_half_c_template(int16_t *dstU,
@@ -323,28 +406,36 @@ static av_always_inline void rgb16_32ToUV_half_c_template(int16_t *dstU,
     maskr |= maskr << 1;
     maskb |= maskb << 1;
     maskg |= maskg << 1;
-    for (i = 0; i < width; i++) {
-        unsigned px0 = input_pixel(2 * i + 0) >> shp;
-        unsigned px1 = input_pixel(2 * i + 1) >> shp;
-        int b, r, g = (px0 & maskgx) + (px1 & maskgx);
-        int rb = px0 + px1 - g;
 
-        b = (rb & maskb) >> shb;
-        if (shp ||
-            origin == AV_PIX_FMT_BGR565LE || origin == AV_PIX_FMT_BGR565BE ||
-            origin == AV_PIX_FMT_RGB565LE || origin == AV_PIX_FMT_RGB565BE) {
-            g >>= shg;
-        } else {
-            g = (g & maskg) >> shg;
+    #define do_it(read1, read2)                                                    \
+        for (i = 0; i < width; i++) {                                              \
+            unsigned px0 = read1 >> shp;                                           \
+            unsigned px1 = read2 >> shp;                                           \
+            int b, r, g = (px0 & maskgx) + (px1 & maskgx);                         \
+            int rb = px0 + px1 - g;                                                \
+                                                                                   \
+            b = (rb & maskb) >> shb;                                               \
+            if (shp ||                                                             \
+                origin == AV_PIX_FMT_BGR565LE || origin == AV_PIX_FMT_BGR565BE ||  \
+                origin == AV_PIX_FMT_RGB565LE || origin == AV_PIX_FMT_RGB565BE) {  \
+                g >>= shg;                                                         \
+            } else {                                                               \
+                g = (g & maskg) >> shg;                                            \
+            }                                                                      \
+            r = (rb & maskr) >> shr;                                               \
+                                                                                   \
+            dstU[i] = (ru * r + gu * g + bu * b + (unsigned)rnd) >> ((S)-6+1);     \
+            dstV[i] = (rv * r + gv * g + bv * b + (unsigned)rnd) >> ((S)-6+1);     \
         }
-        r = (rb & maskr) >> shr;
-
-        dstU[i] = (ru * r + gu * g + bu * b + (unsigned)rnd) >> ((S)-6+1);
-        dstV[i] = (rv * r + gv * g + bv * b + (unsigned)rnd) >> ((S)-6+1);
+    switch (read_mode(origin)) {
+        case 0: do_it(AV_RN32A(&src[i * 8]), AV_RN32A(&src[i * 8 + 4])); break;
+        case 1: do_it(AV_RB16(&src[i * 4]), AV_RB16(&src[i * 4 + 2])); break;
+        case 2: do_it(AV_RL16(&src[i * 4]), AV_RL16(&src[i * 4 + 2])); break;
     }
+    #undef do_it
 }
 
-#undef input_pixel
+#undef read_mode
 
 #define rgb16_32_wrapper(fmt, name, shr, shg, shb, shp, maskr,          \
                          maskg, maskb, rsh, gsh, bsh, S)                \
