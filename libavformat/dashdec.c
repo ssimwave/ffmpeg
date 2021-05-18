@@ -225,7 +225,7 @@ static uint32_t get_duration_insec(AVFormatContext *s, const char *duration)
     uint32_t mins = 0;
     uint32_t secs = 0;
     int size = 0;
-    float value = 0;
+    double value = 0;
     char type = '\0';
     const char *ptr = duration;
 
@@ -235,7 +235,7 @@ static uint32_t get_duration_insec(AVFormatContext *s, const char *duration)
             continue;
         }
 
-        if (sscanf(ptr, "%f%c%n", &value, &type, &size) != 2) {
+        if (sscanf(ptr, "%lf%c%n", &value, &type, &size) != 2) {
             av_log(s, AV_LOG_WARNING, "get_duration_insec get a wrong time format\n");
             return 0; /* parser error */
         }
