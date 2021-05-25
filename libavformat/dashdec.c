@@ -109,12 +109,16 @@ struct representation {
     int64_t cur_seg_size;
     struct fragment *cur_seg;
 
+    /* Currently active period */
+    uint64_t period_start;
+
     /* Currently active Media Initialization Section */
     struct fragment *init_section;
     uint8_t *init_sec_buf;
     uint32_t init_sec_buf_size;
     uint32_t init_sec_data_len;
     uint32_t init_sec_buf_read_offset;
+    int init_loaded;
     int64_t cur_timestamp;
     int is_restart_needed;
 
@@ -1362,7 +1366,7 @@ static int parse_manifest(AVFormatContext *s, const char *url, AVIOContext *in, 
 
                 // Default to the newest available period
                 if (!matching_period_node) {
-                    if (((-1 == curr_timepoint) && (0 ==c->period_start || period_start_sec <= c->period_start)) ||
+                    if (((-1 == curr_timepoint) && (0 == c->period_start || period_start_sec <= c->period_start)) ||
                         ((-1 != curr_timepoint) && (period_start_sec >= c->period_start))) {
                         av_log(s, AV_LOG_VERBOSE, "Default selected period at start %"PRId64"\n", period_start_sec);
                         default_period_node = node;
@@ -1549,8 +1553,32 @@ static void move_segments(struct representation *rep_src, struct representation 
     }
 }
 
+static void move_init_section(struct representation *rep_src, struct representation *rep_dest, DASHContext *c) {
+    if (rep_dest && rep_src ) {
+        rep_dest->init_loaded = 0;
+        rep_dest->init_sec_buf = rep_src->init_sec_buf;
+        rep_dest->init_sec_buf_read_offset = 0;
+        rep_dest->init_sec_buf_size = rep_src->init_sec_buf_size;
+        rep_dest->init_sec_data_len = rep_src->init_sec_data_len;
+    }
+}
 
-static int refresh_manifest(AVFormatContext *s, int64_t curr_timepoint)
+static int64_t get_curr_timepoint(struct representation *pls) {
+    DASHContext *c = pls->parent->priv_data;
+
+    if (c->is_live) {
+        if (pls->n_timelines) {
+            return pls->period_start + (get_segment_start_time_based_on_timeline(c, pls, pls->cur_seq_no) / pls->fragment_timescale);
+        } else if (pls->fragment_duration) {
+            return (pls->first_seq_no * pls->fragment_duration) / pls->fragment_timescale;
+        }
+    }
+
+    // unused
+    return -1;
+}
+
+static int refresh_manifest(AVFormatContext *s, struct representation *target_rep)
 {
     int ret = 0, i;
     DASHContext *c = s->priv_data;
@@ -1562,7 +1590,7 @@ static int refresh_manifest(AVFormatContext *s, int64_t curr_timepoint)
     int n_subtitles = c->n_subtitles;
     struct representation **subtitles = c->subtitles;
     char *base_url = c->base_url;
-    int prev_period_start = c->period_start;
+    int64_t curr_timepoint = get_curr_timepoint(target_rep);
 
     c->base_url = NULL;
     c->n_videos = 0;
@@ -1598,10 +1626,16 @@ static int refresh_manifest(AVFormatContext *s, int64_t curr_timepoint)
     for (i = 0; i < n_videos; i++) {
         struct representation *cur_video = videos[i];
         struct representation *ccur_video = c->videos[i];
+
+        if (cur_video != target_rep) {
+            continue;
+        }
+
         if (cur_video->timelines) {
-            if (c->period_start > prev_period_start) {
+            if (c->period_start > cur_video->period_start) {
                 ccur_video->cur_seq_no = ccur_video->first_seq_no;
                 move_timelines(ccur_video, cur_video, c);
+                move_init_section(ccur_video, cur_video, c);
             }
             else {
                 // continue existing timeline
@@ -1617,14 +1651,23 @@ static int refresh_manifest(AVFormatContext *s, int64_t curr_timepoint)
         if (cur_video->fragments) {
             move_segments(ccur_video, cur_video, c);
         }
+
+        cur_video->period_start = c->period_start;
     }
+
     for (i = 0; i < n_audios; i++) {
         struct representation *cur_audio = audios[i];
         struct representation *ccur_audio = c->audios[i];
+
+        if (cur_audio != target_rep) {
+            continue;
+        }
+
         if (cur_audio->timelines) {
-            if (c->period_start > prev_period_start) {
+            if (c->period_start > cur_audio->period_start) {
                 ccur_audio->cur_seq_no = ccur_audio->first_seq_no;
                 move_timelines(ccur_audio, cur_audio, c);
+                move_init_section(ccur_audio, cur_audio, c);
             }
             else {
                 // continue existing timeline
@@ -1640,6 +1683,8 @@ static int refresh_manifest(AVFormatContext *s, int64_t curr_timepoint)
         if (cur_audio->fragments) {
             move_segments(ccur_audio, cur_audio, c);
         }
+
+        cur_audio->period_start = c->period_start;
     }
 
 finish:
@@ -1665,21 +1710,6 @@ finish:
     return ret;
 }
 
-static int64_t get_curr_timepoint(struct representation *pls) {
-    DASHContext *c = pls->parent->priv_data;
-
-    if (c->is_live) {
-        if (pls->n_timelines) {
-            return c->period_start + (get_segment_start_time_based_on_timeline(c, pls, pls->cur_seq_no) / pls->fragment_timescale);
-        } else if (pls->fragment_duration) {
-            return (pls->first_seq_no * pls->fragment_duration) / pls->fragment_timescale;
-        }
-    }
-
-    // unused
-    return -1;
-}
-
 static struct fragment *get_current_fragment(struct representation *pls)
 {
     int64_t min_seq_no = 0;
@@ -1687,7 +1717,6 @@ static struct fragment *get_current_fragment(struct representation *pls)
     struct fragment *seg = NULL;
     struct fragment *seg_ptr = NULL;
     DASHContext *c = pls->parent->priv_data;
-    int64_t curr_timepoint = get_curr_timepoint(pls);
 
     while (( !ff_check_interrupt(c->interrupt_callback)&& pls->n_fragments > 0)) {
         if (pls->cur_seq_no < pls->n_fragments) {
@@ -1705,7 +1734,7 @@ static struct fragment *get_current_fragment(struct representation *pls)
             seg->url_offset = seg_ptr->url_offset;
             return seg;
         } else if (c->is_live) {
-            refresh_manifest(pls->parent, curr_timepoint);
+            refresh_manifest(pls->parent, pls);
         } else {
             break;
         }
@@ -1715,7 +1744,7 @@ static struct fragment *get_current_fragment(struct representation *pls)
         max_seq_no = calc_max_seg_no(pls, c);
 
         if (pls->timelines || pls->fragments) {
-            refresh_manifest(pls->parent, curr_timepoint);
+            refresh_manifest(pls->parent, pls);
         }
         if (pls->cur_seq_no <= min_seq_no) {
             av_log(pls->parent, AV_LOG_VERBOSE, "old fragment: cur[%"PRId64"] min[%"PRId64"] max[%"PRId64"]\n", (int64_t)pls->cur_seq_no, min_seq_no, max_seq_no);
@@ -1727,7 +1756,7 @@ static struct fragment *get_current_fragment(struct representation *pls)
                 while (pls->cur_seq_no > max_seq_no) {
                     // Keep refreshing until there is a segment available to pull
                     av_log(pls->parent, AV_LOG_VERBOSE, "no fragment available for cur[%"PRId64"], refreshing\n", pls->cur_seq_no);
-                    refresh_manifest(pls->parent, curr_timepoint);
+                    refresh_manifest(pls->parent, pls);
                     max_seq_no = calc_max_seg_no(pls, c);
                 }
             }
@@ -1836,7 +1865,7 @@ static int update_init_section(struct representation *pls)
     int64_t urlsize;
     int ret;
 
-    if (!pls->init_section || pls->init_sec_buf)
+    if (!pls->init_section || pls->init_loaded)
         return 0;
 
     ret = open_input(c, pls, pls->init_section);
@@ -1870,6 +1899,7 @@ static int update_init_section(struct representation *pls)
 
     pls->init_sec_data_len = ret;
     pls->init_sec_buf_read_offset = 0;
+    pls->init_loaded = 1;
 
     return 0;
 }
@@ -1912,8 +1942,13 @@ restart:
 
         /* load/update Media Initialization Section, if any */
         ret = update_init_section(v);
-        if (ret)
-            goto end;
+        if (ret < 0) {
+            if (ff_check_interrupt(c->interrupt_callback)) {
+                ret = AVERROR_EXIT;
+                goto end;
+            }
+            goto restart;
+        }
 
         ret = open_input(c, v, v->cur_seg);
         if (ret < 0) {
