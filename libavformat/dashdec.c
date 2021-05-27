@@ -172,6 +172,8 @@ typedef struct DASHContext {
     int is_init_section_common_audio;
     int is_init_section_common_subtitle;
 
+    char* selected_video_rep_id;
+    char* selected_audio_rep_id;
 } DASHContext;
 
 static int ishttp(char *url)
@@ -1359,7 +1361,6 @@ static int parse_manifest(AVFormatContext *s, const char *url, AVIOContext *in)
 
                 // Select newest available period
                 if (period_start_sec >= selected_period_start_sec) {
-                    av_log(s, AV_LOG_VERBOSE, "Selected period at start %"PRId64"\n", period_start_sec);
                     period_node = node;
                     selected_period_duration_sec = period_duration_sec;
                     selected_period_start_sec = period_start_sec;
@@ -1375,8 +1376,8 @@ static int parse_manifest(AVFormatContext *s, const char *url, AVIOContext *in)
             goto cleanup;
         }
         if (0 != c->period_start && (selected_period_start_sec != c->period_start)) {
-            av_log(s, AV_LOG_PANIC, "Detected period change (previous start %d, new start %"PRIu64")\n",
-                selected_period_start_sec, c->period_start);
+            av_log(s, AV_LOG_PANIC, "Detected period change (previous start %u, new start %"PRIu64")\n",
+                c->period_start, selected_period_start_sec);
             ret = AVERROR_INPUT_CHANGED;
             goto cleanup;
         }
@@ -1669,7 +1670,7 @@ static int get_current_fragment(struct representation *pls, struct fragment** ne
             *new_seg = seg;
             return 0;
         } else if (c->is_live) {
-            err = refresh_manifest(pls->parent, curr_timepoint);
+            err = refresh_manifest(pls->parent);
             if (0 != err) {
                 return err;
             }
@@ -1682,7 +1683,7 @@ static int get_current_fragment(struct representation *pls, struct fragment** ne
         max_seq_no = calc_max_seg_no(pls, c);
 
         if (pls->timelines || pls->fragments) {
-            err = refresh_manifest(pls->parent, curr_timepoint);
+            err = refresh_manifest(pls->parent);
             if (0 != err) {
                 return err;
             }
@@ -2321,7 +2322,7 @@ static int dash_read_packet(AVFormatContext *s, AVPacket *pkt)
         rep = c->videos[i];
         if (!rep->ctx)
             continue;
-        if (!cur || rep->cur_timestamp < mints)) {
+        if (!cur || rep->cur_timestamp < mints) {
             cur = rep;
             mints = rep->cur_timestamp;
         }
@@ -2330,7 +2331,7 @@ static int dash_read_packet(AVFormatContext *s, AVPacket *pkt)
         rep = c->audios[i];
         if (!rep->ctx)
             continue;
-        if (!cur || rep->cur_timestamp < mints)) {
+        if (!cur || rep->cur_timestamp < mints) {
             cur = rep;
             mints = rep->cur_timestamp;
         }
@@ -2340,7 +2341,7 @@ static int dash_read_packet(AVFormatContext *s, AVPacket *pkt)
         rep = c->subtitles[i];
         if (!rep->ctx)
             continue;
-        if (!cur || rep->cur_timestamp < mints)) {
+        if (!cur || rep->cur_timestamp < mints) {
             cur = rep;
             mints = rep->cur_timestamp;
         }
@@ -2521,7 +2522,10 @@ static const AVOption dash_options[] = {
         OFFSET(use_timeline_segment_offset_correction), AV_OPT_TYPE_BOOL, {.i64 = 1}, 0, 1, FLAGS},
     { "fetch_completed_segments_only", "Only fetch completed segments from the content provider",
         OFFSET(fetch_completed_segments_only), AV_OPT_TYPE_BOOL, {.i64 = 1}, 0, 1, FLAGS},
-
+    { "selected_video_rep_id", "Video represention ID to filter on",
+        OFFSET(selected_video_rep_id), AV_OPT_TYPE_STRING, {.str = NULL}, .flags = FLAGS},
+    { "selected_audio_rep_id", "Audio represention ID to filter on",
+        OFFSET(selected_audio_rep_id), AV_OPT_TYPE_STRING, {.str = NULL}, .flags = FLAGS},
     {NULL}
 };
 
