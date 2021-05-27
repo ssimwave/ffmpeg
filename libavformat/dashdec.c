@@ -83,6 +83,7 @@ struct representation {
     int stream_index;
 
     char *id;
+    size_t id_length;
     char *lang;
     char *codecs;
     char *scantype;
@@ -926,6 +927,7 @@ static int parse_manifest_representation(AVFormatContext *s, const char *url,
             xmlFree(val);
             if (!rep->id)
                 goto enomem;
+            rep->id_length = strlen(rep->id);
         }
 
         baseurl_nodes[0] = mpd_baseurl_node;
@@ -1728,7 +1730,7 @@ static int move_audio_params(DASHContext *c, struct representation* rep_src,
 
 static int refresh_manifest(AVFormatContext *s, struct representation *target_rep)
 {
-    int ret = 0, i;
+    int ret = 0, i, j;
     DASHContext *c = s->priv_data;
     // save current context
     int n_videos = c->n_videos;
@@ -1756,27 +1758,39 @@ static int refresh_manifest(AVFormatContext *s, struct representation *target_re
         av_log(c, AV_LOG_WARNING,
                "new manifest has mismatched no. of video representations, %d -> %d\n",
                n_videos, c->n_videos);
-        return AVERROR_INVALIDDATA;
     }
     if (c->n_audios != n_audios) {
-        av_log(c, AV_LOG_ERROR,
+        av_log(c, AV_LOG_WARNING,
                "new manifest has mismatched no. of audio representations, %d -> %d\n",
                n_audios, c->n_audios);
-        return AVERROR_INVALIDDATA;
     }
     if (c->n_subtitles != n_subtitles) {
-        av_log(c, AV_LOG_ERROR,
+        av_log(c, AV_LOG_WARNING,
                "new manifest has mismatched no. of subtitles representations, %d -> %d\n",
                n_subtitles, c->n_subtitles);
-        return AVERROR_INVALIDDATA;
     }
 
     for (i = 0; i < n_videos; i++) {
         struct representation *cur_video = videos[i];
-        struct representation *ccur_video = c->videos[i];
+        struct representation *ccur_video = NULL;
 
         if (cur_video != target_rep) {
             continue;
+        }
+
+        for (j = 0; j < c->n_videos; j++) {
+            if (c->videos[j]->id && cur_video->id &&
+                (c->videos[j]->id_length == cur_video->id_length) &&
+                !strncmp(c->videos[j]->id, cur_video->id, cur_video->id_length)) {
+                ccur_video = c->videos[j];
+                break;
+            }
+        }
+
+        if (!ccur_video) {
+            av_log(c, AV_LOG_ERROR, "new manifest is missing video representation %s\n",
+                cur_video->id ? cur_video->id : "");
+            return AVERROR_INVALIDDATA;
         }
 
         ret = move_video_params(c, ccur_video, cur_video);
@@ -1818,10 +1832,25 @@ static int refresh_manifest(AVFormatContext *s, struct representation *target_re
 
     for (i = 0; i < n_audios; i++) {
         struct representation *cur_audio = audios[i];
-        struct representation *ccur_audio = c->audios[i];
+        struct representation *ccur_audio = NULL;
 
         if (cur_audio != target_rep) {
             continue;
+        }
+
+        for (j = 0; j < c->n_audios; j++) {
+            if (c->audios[j]->id && cur_audio->id &&
+                (c->audios[j]->id_length == cur_audio->id_length) &&
+                !strncmp(c->audios[j]->id, cur_audio->id, cur_audio->id_length)) {
+                ccur_audio = c->audios[j];
+                break;
+            }
+        }
+
+        if (!ccur_audio) {
+            av_log(c, AV_LOG_ERROR, "new manifest is missing audio representation %s\n",
+                cur_audio->id ? cur_audio->id : "");
+            return AVERROR_INVALIDDATA;
         }
 
         ret = move_audio_params(c, ccur_audio, cur_audio);
