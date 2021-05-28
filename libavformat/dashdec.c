@@ -1671,7 +1671,7 @@ static int get_current_fragment(struct representation *pls, struct fragment** ne
             return 0;
         } else if (c->is_live) {
             err = refresh_manifest(pls->parent);
-            if (0 != err) {
+            if (AVERROR_INPUT_CHANGED == err) {
                 return err;
             }
         } else {
@@ -1684,7 +1684,7 @@ static int get_current_fragment(struct representation *pls, struct fragment** ne
 
         if (pls->timelines || pls->fragments) {
             err = refresh_manifest(pls->parent);
-            if (0 != err) {
+            if (AVERROR_INPUT_CHANGED == err) {
                 return err;
             }
         }
