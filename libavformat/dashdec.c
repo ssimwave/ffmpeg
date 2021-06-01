@@ -151,7 +151,6 @@ typedef struct DASHContext {
     uint64_t period_duration;
     uint64_t period_start;
 
-
     /* AdaptationSet Attribute */
     char *adaptionset_lang;
 
@@ -1258,6 +1257,8 @@ static int parse_manifest(AVFormatContext *s, const char *url, AVIOContext *in)
     uint32_t period_start_sec = 0;
     uint32_t selected_period_duration_sec = 0;
     uint32_t selected_period_start_sec = 0;
+    uint64_t current_time_sec = 0;
+    uint64_t current_time_to_period_delta_sec = UINT64_MAX;
 
     if (!in) {
         close_in = 1;
@@ -1315,8 +1316,10 @@ static int parse_manifest(AVFormatContext *s, const char *url, AVIOContext *in)
             ret = AVERROR_INVALIDDATA;
             goto cleanup;
         }
-        if (!av_strcasecmp(val, (const char *)"dynamic"))
+        if (!av_strcasecmp(val, (const char *)"dynamic")) {
             c->is_live = 1;
+            current_time_sec = get_current_time_in_sec();
+        }
         xmlFree(val);
 
         attr = node->properties;
@@ -1379,11 +1382,30 @@ static int parse_manifest(AVFormatContext *s, const char *url, AVIOContext *in)
                     xmlFree(val);
                 }
 
-                // Select newest available period
-                if (period_start_sec >= selected_period_start_sec) {
-                    period_node = node;
-                    selected_period_duration_sec = period_duration_sec;
-                    selected_period_start_sec = period_start_sec;
+                if (c->is_live) {
+                    uint64_t period_wallclock_start_sec = c->availability_start_time + period_start_sec;
+                    if (current_time_sec >= period_wallclock_start_sec) {
+                        uint64_t delta = current_time_sec - period_wallclock_start_sec;
+                        if (delta <= current_time_to_period_delta_sec) {
+                            av_log(s, AV_LOG_VERBOSE,
+                                "Found candidate period (AST: %"PRIu64", PS: %"PRIu64", Now: %"PRIu64"\n",
+                                c->availability_start_time, period_start_sec, current_time_sec);
+
+                            // Period that began before and closer to the current wallclock time
+                            current_time_to_period_delta_sec = delta;
+                            period_node = node;
+                            selected_period_duration_sec = period_duration_sec;
+                            selected_period_start_sec = period_start_sec;
+                        }
+                    }
+                }
+                else {
+                    // Select longest duration period for VOD (as per stock ffmpeg)
+                    if (period_duration_sec >= selected_period_duration_sec) {
+                        period_node = node;
+                        selected_period_duration_sec = period_duration_sec;
+                        selected_period_start_sec = period_start_sec;
+                    }
                 }
             } else if (!av_strcasecmp(node->name, "ProgramInformation")) {
                 parse_programinformation(s, node);
@@ -2529,7 +2551,7 @@ static const AVOption dash_options[] = {
     { "use_timeline_segment_offset_correction", "Use patch for timeline segment selection",
         OFFSET(use_timeline_segment_offset_correction), AV_OPT_TYPE_BOOL, {.i64 = 1}, 0, 1, FLAGS},
     { "fetch_completed_segments_only", "Only fetch completed segments from the content provider",
-        OFFSET(fetch_completed_segments_only), AV_OPT_TYPE_BOOL, {.i64 = 1}, 0, 1, FLAGS},
+        OFFSET(fetch_completed_segments_only), AV_OPT_TYPE_BOOL, {.i64 = 1}, 1, 1, FLAGS},
     { "selected_video_rep_id", "Video represention ID to filter on",
         OFFSET(selected_video_rep_id), AV_OPT_TYPE_STRING, {.str = NULL}, .flags = FLAGS},
     { "selected_audio_rep_id", "Audio represention ID to filter on",
