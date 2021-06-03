@@ -178,6 +178,22 @@ static int http_connect(URLContext *h, const char *path, const char *local_path,
 static int http_read_header(URLContext *h, int *new_location);
 static int http_shutdown(URLContext *h, int flags);
 
+static void http_add_status_data(URLContext* h, AVDictionary** dict) {
+    HTTPContext *s = h->priv_data;
+
+    if (!dict) {
+        return;
+    }
+
+    if (s->method) {
+        av_dict_set(dict, "http_cache_method", s->method, 0);
+    }
+    else {
+        av_dict_set(dict, "http_cache_method", s->post_data ? "POST" : "GET", 0);
+    }
+    av_dict_set_int(dict, "http_cache_status_code", s->http_code, 0);
+}
+
 void ff_http_init_auth_state(URLContext *dest, const URLContext *src)
 {
     memcpy(&((HTTPContext *)dest->priv_data)->auth_state,
@@ -252,6 +268,7 @@ static int http_open_cnx_internal(URLContext *h, AVDictionary **options)
 
     err = http_connect(h, path, local_path, hoststr,
                        auth, proxyauth, &location_changed);
+
     if (err < 0)
         return err;
 
@@ -385,6 +402,8 @@ int ff_http_do_new_request2(URLContext *h, const char *uri, AVDictionary **opts)
     av_log(s, AV_LOG_INFO, "Opening \'%s\' for %s\n", uri, h->flags & AVIO_FLAG_WRITE ? "writing" : "reading");
     ret = http_open_cnx(h, &options);
     av_dict_free(&options);
+
+    http_add_status_data(h, opts);
     return ret;
 }
 
@@ -590,6 +609,8 @@ static int http_open(URLContext *h, const char *uri, int flags,
     ret = http_open_cnx(h, options);
     if (ret < 0)
         av_dict_free(&s->chained_options);
+
+    http_add_status_data(h, options);
     return ret;
 }
 

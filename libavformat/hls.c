@@ -774,11 +774,22 @@ static int open_url(AVFormatContext *s, AVIOContext **pb, const char *url,
             av_dict_set(opts, "cookies", new_cookies, AV_DICT_DONT_STRDUP_VAL);
     }
 
-    av_dict_free(&tmp);
-
     if (is_http_out)
         *is_http_out = is_http;
 
+    if (is_http) {
+        if (s && s->http_response_code_callback) {
+            AVDictionaryEntry* methodEntry = av_dict_get(tmp, "http_cache_method", NULL, 0);
+            AVDictionaryEntry* statusCodeEntry = av_dict_get(tmp, "http_cache_status_code", NULL, 0);
+            if (methodEntry && statusCodeEntry) {
+                int statusCodeInt = strtoul(statusCodeEntry->value, NULL, 10);
+                s->http_response_code_callback(s->http_response_code_callback_context,
+                                               url, methodEntry->value, statusCodeInt);
+            }
+        }
+    }
+
+    av_dict_free(&tmp);
     return ret;
 }
 
