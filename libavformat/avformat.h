@@ -1702,6 +1702,14 @@ typedef struct AVFormatContext {
      * - decoding: set by user
      */
     int max_probe_packets;
+
+    /**
+     * SSIMWAVE
+     * Callback to notify clients for ABR formats when an HTTP response has been received
+     */
+    void (*http_response_code_callback)(void* opaque, const char* url, const char* method, int response_code);
+    void* http_response_code_callback_context;
+
 } AVFormatContext;
 
 /**

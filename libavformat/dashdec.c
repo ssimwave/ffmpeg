@@ -428,6 +428,7 @@ static int open_url(AVFormatContext *s, AVIOContext **pb, const char *url,
     AVDictionary *tmp = NULL;
     const char *proto_name = NULL;
     int ret;
+    int is_proto_http = 0;
 
     if (av_strstart(url, "crypto", NULL)) {
         if (url[6] == '+' || url[6] == ':')
@@ -464,6 +465,7 @@ static int open_url(AVFormatContext *s, AVIOContext **pb, const char *url,
     av_freep(pb);
     av_dict_copy(&tmp, *opts, 0);
     av_dict_copy(&tmp, opts2, 0);
+
     ret = avio_open2(pb, url, AVIO_FLAG_READ, c->interrupt_callback, &tmp);
     if (ret >= 0) {
         // update cookies on http response with setcookies.
@@ -478,11 +480,24 @@ static int open_url(AVFormatContext *s, AVIOContext **pb, const char *url,
 
     }
 
+    is_proto_http = av_strstart(proto_name, "http", NULL);
+    if (is_http) {
+        *is_http = is_proto_http;
+    }
+
+    if (is_proto_http) {
+        if (s && s->http_response_code_callback) {
+            AVDictionaryEntry* methodEntry = av_dict_get(tmp, "http_cache_method", NULL, 0);
+            AVDictionaryEntry* statusCodeEntry = av_dict_get(tmp, "http_cache_status_code", NULL, 0);
+            if (methodEntry && statusCodeEntry) {
+                int statusCodeInt = strtoul(statusCodeEntry->value, NULL, 10);
+                s->http_response_code_callback(s->http_response_code_callback_context,
+                                               url, methodEntry->value, statusCodeInt);
+            }
+        }
+    }
+
     av_dict_free(&tmp);
-
-    if (is_http)
-        *is_http = av_strstart(proto_name, "http", NULL);
-
     return ret;
 }
 
@@ -1368,7 +1383,7 @@ static int parse_manifest(AVFormatContext *s, const char *url, AVIOContext *in)
                         uint64_t delta = current_time_sec - period_wallclock_start_sec;
                         if (delta <= current_time_to_period_delta_sec) {
                             av_log(s, AV_LOG_VERBOSE,
-                                "Found candidate period (AST: %"PRIu64", PS: %"PRIu64", Now: %"PRIu64"\n",
+                                "Found candidate period (AST: %"PRIu64", PS: %u, Now: %"PRIu64"\n",
                                 c->availability_start_time, period_start_sec, current_time_sec);
 
                             // Period that began before and closer to the current wallclock time
@@ -1398,7 +1413,7 @@ static int parse_manifest(AVFormatContext *s, const char *url, AVIOContext *in)
             goto cleanup;
         }
         if (0 != c->period_start && (selected_period_start_sec != c->period_start)) {
-            av_log(s, AV_LOG_PANIC, "Detected period change (previous start %u, new start %"PRIu64")\n",
+            av_log(s, AV_LOG_PANIC, "Detected period change (previous start %"PRIu64", new start %u)\n",
                 c->period_start, selected_period_start_sec);
             ret = AVERROR_INPUT_CHANGED;
             goto cleanup;
