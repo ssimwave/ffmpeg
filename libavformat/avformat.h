@@ -1820,6 +1820,14 @@ typedef struct AVFormatContext {
      * @return 0 on success, a negative AVERROR code on failure
      */
     int (*io_close2)(struct AVFormatContext *s, AVIOContext *pb);
+
+    /**
+     * SSIMWAVE
+     * Callback to notify clients for ABR formats when an HTTP response has been received
+     */
+    void (*http_response_code_callback)(void* opaque, const char* url, const char* method, int response_code);
+    void* http_response_code_callback_context;
+
 } AVFormatContext;
 
 /**
