@@ -420,7 +420,8 @@ static void free_subtitle_list(DASHContext *c)
 }
 
 static int open_url(AVFormatContext *s, AVIOContext **pb, const char *url,
-                    AVDictionary **opts, AVDictionary *opts2, int *is_http)
+                    AVDictionary **opts, AVDictionary *opts2, int *is_http,
+                    const AVStream* stream)
 {
     DASHContext *c = s->priv_data;
     AVDictionary *tmp = NULL;
@@ -485,12 +486,13 @@ static int open_url(AVFormatContext *s, AVIOContext **pb, const char *url,
 
     if (is_proto_http) {
         if (s && s->http_response_code_callback) {
-            AVDictionaryEntry* methodEntry = av_dict_get(tmp, "http_cache_method", NULL, 0);
-            AVDictionaryEntry* statusCodeEntry = av_dict_get(tmp, "http_cache_status_code", NULL, 0);
-            if (methodEntry && statusCodeEntry) {
-                int statusCodeInt = strtoul(statusCodeEntry->value, NULL, 10);
+            AVDictionaryEntry* method_entry = av_dict_get(tmp, "http_cache_method", NULL, 0);
+            AVDictionaryEntry* status_code_entry = av_dict_get(tmp, "http_cache_status_code", NULL, 0);
+            if (method_entry && status_code_entry) {
+                int status_code_int = strtoul(status_code_entry->value, NULL, 10);
                 s->http_response_code_callback(s->http_response_code_callback_context,
-                                               url, methodEntry->value, statusCodeInt);
+                                               &stream->id, 1,
+                                               url, method_entry->value, status_code_int);
             }
         }
     }
@@ -1839,7 +1841,7 @@ static int open_input(DASHContext *c, struct representation *pls, struct fragmen
 
     av_log(pls->parent, AV_LOG_VERBOSE, "DASH request for url '%s', offset %"PRId64"\n",
            url, seg->url_offset);
-    ret = open_url(pls->parent, &pls->input, url, &c->avio_opts, opts, NULL);
+    ret = open_url(pls->parent, &pls->input, url, &c->avio_opts, opts, NULL, pls->assoc_stream);
 
 cleanup:
     av_free(url);
