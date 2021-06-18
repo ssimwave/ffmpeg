@@ -604,6 +604,9 @@ static enum AVMediaType get_content_type(xmlNodePtr node)
                 }
                 xmlFree(val);
             }
+            if (type != AVMEDIA_TYPE_UNKNOWN) {
+                break;
+            }
         }
     }
     return type;
