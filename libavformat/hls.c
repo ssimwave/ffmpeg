@@ -43,7 +43,7 @@
 
 #define MAX_FIELD_LEN 64
 #define MAX_CHARACTERISTICS_LEN 512
-#define MAX_AV_STREAM_IDS 64
+#define MAX_AV_STREAM_INDEX 64
 
 #define MPEG_TIME_BASE 90000
 #define MPEG_TIME_BASE_Q (AVRational){1, MPEG_TIME_BASE}
@@ -785,13 +785,13 @@ static int open_url(AVFormatContext *s, AVIOContext **pb, const char *url,
             AVDictionaryEntry* status_code_entry = av_dict_get(tmp, "http_cache_status_code", NULL, 0);
             if (method_entry && status_code_entry) {
                 int status_code_int = strtoul(status_code_entry->value, NULL, 10);
-                int av_stream_ids[MAX_AV_STREAM_IDS];
+                int av_stream_indices[MAX_AV_STREAM_INDEX];
                 size_t index = 0;
-                for (index = 0; index < num_streams && index < MAX_AV_STREAM_IDS; ++index) {
-                    av_stream_ids[index] = streams[index]->id;
+                for (index = 0; index < num_streams && index < MAX_AV_STREAM_INDEX; ++index) {
+                    av_stream_indices[index] = streams[index]->index;
                 }
                 s->http_response_code_callback(s->http_response_code_callback_context,
-                                               av_stream_ids, FFMIN(num_streams, MAX_AV_STREAM_IDS),
+                                               av_stream_indices, FFMIN(num_streams, MAX_AV_STREAM_INDEX),
                                                url, method_entry->value, status_code_int);
             }
         }
