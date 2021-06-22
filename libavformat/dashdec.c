@@ -491,7 +491,7 @@ static int open_url(AVFormatContext *s, AVIOContext **pb, const char *url,
             if (method_entry && status_code_entry) {
                 int status_code_int = strtoul(status_code_entry->value, NULL, 10);
                 s->http_response_code_callback(s->http_response_code_callback_context,
-                                               &stream->id, 1,
+                                               &stream->index, 1,
                                                url, method_entry->value, status_code_int);
             }
         }
