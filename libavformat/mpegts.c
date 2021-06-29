@@ -1984,12 +1984,24 @@ int ff_parse_mpeg2_descriptor(AVFormatContext *fc, AVStream *st, int stream_type
         }
         break;
     case 0x05: /* registration descriptor */
-        st->codecpar->codec_tag = bytestream_get_le32(pp);
-        av_log(fc, AV_LOG_TRACE, "reg_desc=%.4s\n", (char *)&st->codecpar->codec_tag);
-        if (st->codecpar->codec_id == AV_CODEC_ID_NONE || st->request_probe > 0) {
-            mpegts_find_stream_type(st, st->codecpar->codec_tag, REGD_types);
-            if (st->codecpar->codec_tag == MKTAG('B', 'S', 'S', 'D'))
-                st->request_probe = 50;
+        {
+            uint32_t prog_reg_desc = bytestream_get_le32(pp);
+
+            // DVB TS 101 154
+            if (stream_type == STREAM_TYPE_PRIVATE_DATA
+                 // ATSC A/52 Annex A
+                 || (stream_type == STREAM_TYPE_AUDIO_AC3 && (strncmp((char *)&prog_reg_desc, "AC-3", 4) == 0)) // ATSC
+                 // ATSC A/52 Annex G
+                 || (stream_type == STREAM_TYPE_AUDIO_EAC3 && (strncmp((char *)&prog_reg_desc, "EAC3", 4) == 0))) {
+
+                st->codecpar->codec_tag = prog_reg_desc;
+                av_log(fc, AV_LOG_TRACE, "reg_desc=%.4s\n", (char *)&st->codecpar->codec_tag);
+                if (st->codecpar->codec_id == AV_CODEC_ID_NONE || st->request_probe > 0) {
+                    mpegts_find_stream_type(st, st->codecpar->codec_tag, REGD_types);
+                    if (st->codecpar->codec_tag == MKTAG('B', 'S', 'S', 'D'))
+                        st->request_probe = 50;
+                }
+            }
         }
         break;
     case 0x52: /* stream identifier descriptor */
@@ -2074,7 +2086,9 @@ int ff_parse_mpeg2_descriptor(AVFormatContext *fc, AVStream *st, int stream_type
         }
         break;
     case 0x6a: /* ac-3_descriptor */
-        {
+        if (stream_type == STREAM_TYPE_AUDIO_AC3
+            || stream_type == STREAM_TYPE_AUDIO_EAC3
+            || stream_type == STREAM_TYPE_PRIVATE_DATA) {
             int component_type_flag = get8(pp, desc_end) & (1 << 7);
             if (component_type_flag) {
                 int component_type = get8(pp, desc_end);
@@ -2088,7 +2102,9 @@ int ff_parse_mpeg2_descriptor(AVFormatContext *fc, AVStream *st, int stream_type
         }
         break;
     case 0x7a: /* enhanced_ac-3_descriptor */
-        {
+        if (stream_type == STREAM_TYPE_AUDIO_AC3
+            || stream_type == STREAM_TYPE_AUDIO_EAC3
+            || stream_type == STREAM_TYPE_PRIVATE_DATA) {
             int component_type_flag = get8(pp, desc_end) & (1 << 7);
             if (component_type_flag) {
                 int component_type = get8(pp, desc_end);
