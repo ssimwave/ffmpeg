@@ -2148,22 +2148,23 @@ static int hls_read_header(AVFormatContext *s)
                 if (in_fmt->raw_codec_id == pls->audio_setup_info.codec_id)
                     break;
         } else {
-        pls->ctx->probesize = s->probesize > 0 ? s->probesize : 1024 * 4;
-        pls->ctx->max_analyze_duration = s->max_analyze_duration > 0 ? s->max_analyze_duration : 4 * AV_TIME_BASE;
-        url = av_strdup(pls->segments[0]->url);
-        ret = av_probe_input_buffer(&pls->pb, &in_fmt, url, NULL, 0, 0);
-        av_free(url);
-        if (ret < 0) {
-            /* Free the ctx - it isn't initialized properly at this point,
-             * so avformat_close_input shouldn't be called. If
-             * avformat_open_input fails below, it frees and zeros the
-             * context, so it doesn't need any special treatment like this. */
-            av_log(s, AV_LOG_ERROR, "Error when loading first segment '%s'\n", pls->segments[0]->url);
-            avformat_free_context(pls->ctx);
-            pls->ctx = NULL;
-            goto fail;
-        }
-        av_free(url);
+            pls->ctx->probesize = s->probesize > 0 ? s->probesize : 1024 * 4;
+            pls->ctx->max_analyze_duration = s->max_analyze_duration > 0 ? s->max_analyze_duration : 4 * AV_TIME_BASE;
+            pls->ctx->interrupt_callback = s->interrupt_callback;
+            url = av_strdup(pls->segments[0]->url);
+            ret = av_probe_input_buffer(&pls->pb.pub, &in_fmt, url, NULL, 0, 0);
+            if (ret < 0) {
+                /* Free the ctx - it isn't initialized properly at this point,
+                * so avformat_close_input shouldn't be called. If
+                * avformat_open_input fails below, it frees and zeros the
+                * context, so it doesn't need any special treatment like this. */
+                av_log(s, AV_LOG_ERROR, "Error when loading first segment '%s'\n", url);
+                avformat_free_context(pls->ctx);
+                pls->ctx = NULL;
+                av_free(url);
+                return ret;
+            }
+            av_free(url);
         }
 
         if (seg && seg->key_type == KEY_SAMPLE_AES) {
@@ -2220,7 +2221,7 @@ static int hls_read_header(AVFormatContext *s)
                 pls->ctx->nb_streams == 1)
                 ret = ff_hls_senc_parse_audio_setup_info(pls->ctx->streams[0], &pls->audio_setup_info);
             else
-            ret = avformat_find_stream_info(pls->ctx, NULL);
+                ret = avformat_find_stream_info(pls->ctx, NULL);
 
             if (ret < 0)
                 goto fail;
