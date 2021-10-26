@@ -242,7 +242,7 @@ typedef struct HLSContext {
 } HLSContext;
 
 static int64_t get_actual_segment_size(struct playlist *pls, struct segment* seg) {
-    AVFormatContext s = pls->parent;
+    AVFormatContext* s = pls->parent;
     HLSContext *c = s->priv_data;
     AVIOContext* pb = NULL;
     AVDictionary *opts = NULL;
