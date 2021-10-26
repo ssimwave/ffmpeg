@@ -247,7 +247,7 @@ static int64_t get_actual_segment_size(struct playlist *pls, struct segment* seg
     int64_t actual_size = -1;
 
     av_dict_copy(&opts, pls->ctx->avio_opts, 0);
-    if (pls->ctx->io_open(pls->ctx &pb, seg->url, AVIO_FLAG_READ, &opts)) {
+    if (pls->ctx->io_open(pls->ctx, &pb, seg->url, AVIO_FLAG_READ, &opts)) {
         actual_size = avio_seek(pb, 0, AVSEEK_SIZE);
     }
     av_dict_free(&opts);
