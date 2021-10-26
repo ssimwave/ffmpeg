@@ -241,14 +241,17 @@ typedef struct HLSContext {
     int variant_count;
 } HLSContext;
 
-static int64_t get_actual_segment_size(struct segment* seg) {
-    URLContext* urlCtx;
+static int64_t get_actual_segment_size(struct playlist *pls, struct segment* seg) {
+    AVIOContext* pb = NULL;
+    AVDictionary *opts = NULL;
     int64_t actual_size = -1;
 
-    if (ffurl_open_whitelist(&urlCtx, seg->url, 0, NULL, NULL, NULL, NULL, NULL) >= 0) {
-        actual_size = ffurl_seek(urlCtx, 0, AVSEEK_SIZE);
+    av_dict_copy(&opts, c->avio_opts, 0);
+    if (pls->ctx->io_open(pls->ctx pls->pb, seg->url, AVIO_FLAG_READ, &opts)) {
+        actual_size = avio_seek(pb, 0, AVSEEK_SIZE);
     }
-    ffurl_close(urlCtx);
+    av_dict_free(&tmp);
+    pls->ctx->io_close(pls->ctx, pb);
 
     return actual_size;
 }
@@ -511,7 +514,7 @@ static struct segment *new_init_section(struct playlist *pls,
     }
 
     // Actual Segment Size
-    sec->actual_size = get_actual_segment_size(sec);
+    sec->actual_size = get_actual_segment_size(pls, sec);
 
     dynarray_add(&pls->init_sections, &pls->n_init_sections, sec);
 
@@ -1601,7 +1604,7 @@ reload:
         seg = current_segment(v);
 
         // Get actual segment size
-        seg->actual_size = get_actual_segment_size(seg);
+        seg->actual_size = get_actual_segment_size(v, seg);
 
         /* load/update Media Initialization Section, if any */
         ret = update_init_section(v, seg);
