@@ -246,11 +246,11 @@ static int64_t get_actual_segment_size(struct playlist *pls, struct segment* seg
     AVDictionary *opts = NULL;
     int64_t actual_size = -1;
 
-    av_dict_copy(&opts, c->avio_opts, 0);
-    if (pls->ctx->io_open(pls->ctx pls->pb, seg->url, AVIO_FLAG_READ, &opts)) {
+    av_dict_copy(&opts, pls->ctx->avio_opts, 0);
+    if (pls->ctx->io_open(pls->ctx &pb, seg->url, AVIO_FLAG_READ, &opts)) {
         actual_size = avio_seek(pb, 0, AVSEEK_SIZE);
     }
-    av_dict_free(&tmp);
+    av_dict_free(&opts);
     pls->ctx->io_close(pls->ctx, pb);
 
     return actual_size;
@@ -2388,8 +2388,10 @@ static int hls_read_packet(AVFormatContext *s, AVPacket *pkt)
             /* If the playlist is VOD then let's cap it to the number of segments */
             if (pls->finished) {
                 if (pkt->pos >= pls->segment_boundary_position + pls->init_sec_buf_read_offset) {
-                    pls->reported_segment_number++;
-                    pls->segment_boundary_position += pls->segments[pls->reported_segment_number - pls->start_seq_no]->actual_size;
+                    if (pls->reported_segment_number + 1 < pls->n_segments) {
+                        pls->reported_segment_number++;
+                        pls->segment_boundary_position += pls->segments[pls->reported_segment_number - pls->start_seq_no]->actual_size;
+                    }
                 }
                 cur_seq_no = pls->reported_segment_number;
             }
