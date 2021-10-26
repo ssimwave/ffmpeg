@@ -242,13 +242,14 @@ typedef struct HLSContext {
 } HLSContext;
 
 static int64_t get_actual_segment_size(struct playlist *pls, struct segment* seg) {
-    HLSContext *c = pls->parent->priv_data;
+    AVFormatContext s = pls->parent;
+    HLSContext *c = s->priv_data;
     AVIOContext* pb = NULL;
     AVDictionary *opts = NULL;
     int64_t actual_size = -1;
 
     av_dict_copy(&opts, c->avio_opts, 0);
-    if (pls->ctx->io_open(pls->ctx, &pb, seg->url, AVIO_FLAG_READ, &opts)) {
+    if (s->io_open(s, &pb, seg->url, AVIO_FLAG_READ, &opts)) {
         actual_size = avio_seek(pb, 0, AVSEEK_SIZE);
     }
     av_dict_free(&opts);
