@@ -254,7 +254,7 @@ static int64_t get_actual_segment_size(struct playlist *pls, struct segment* seg
     }
     av_dict_free(&opts);
     pls->ctx->io_close(pls->ctx, pb);
-
+    av_log(s, AV_LOG_DEBUG, "Segment %s, size %ld\n", seg->url, actual_size);
     return actual_size;
 }
 
