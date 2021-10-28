@@ -241,15 +241,20 @@ typedef struct HLSContext {
     int variant_count;
 } HLSContext;
 
-static int64_t get_actual_segment_size(struct segment* seg) {
-    URLContext* urlCtx;
+static int64_t get_actual_segment_size(struct playlist *pls, struct segment* seg) {
+    AVFormatContext* s = pls->parent;
+    HLSContext *c = s->priv_data;
+    AVIOContext* pb = NULL;
+    AVDictionary *opts = NULL;
     int64_t actual_size = -1;
 
-    if (ffurl_open_whitelist(&urlCtx, seg->url, 0, NULL, NULL, NULL, NULL, NULL) >= 0) {
-        actual_size = ffurl_seek(urlCtx, 0, AVSEEK_SIZE);
+    av_dict_copy(&opts, c->avio_opts, 0);
+    if (s->io_open(s, &pb, seg->url, AVIO_FLAG_READ, &opts) >= 0) {
+        actual_size = avio_size(pb);
     }
-    ffurl_close(urlCtx);
-
+    ff_format_io_close(s, &pb);
+    av_dict_free(&opts);
+    av_log(s, AV_LOG_DEBUG, "Segment %s, size %ld\n", seg->url, actual_size);
     return actual_size;
 }
 
@@ -510,8 +515,8 @@ static struct segment *new_init_section(struct playlist *pls,
         sec->size = -1;
     }
 
-    // Actual Segment Size
-    sec->actual_size = get_actual_segment_size(sec);
+    // set later
+    sec->actual_size = -1;
 
     dynarray_add(&pls->init_sections, &pls->n_init_sections, sec);
 
@@ -1601,7 +1606,7 @@ reload:
         seg = current_segment(v);
 
         // Get actual segment size
-        seg->actual_size = get_actual_segment_size(seg);
+        seg->actual_size = get_actual_segment_size(v, seg);
 
         /* load/update Media Initialization Section, if any */
         ret = update_init_section(v, seg);
@@ -2385,8 +2390,10 @@ static int hls_read_packet(AVFormatContext *s, AVPacket *pkt)
             /* If the playlist is VOD then let's cap it to the number of segments */
             if (pls->finished) {
                 if (pkt->pos >= pls->segment_boundary_position + pls->init_sec_buf_read_offset) {
-                    pls->reported_segment_number++;
-                    pls->segment_boundary_position += pls->segments[pls->reported_segment_number - pls->start_seq_no]->actual_size;
+                    if ((pls->reported_segment_number - pls->start_seq_no) + 1 < pls->n_segments) {
+                        pls->reported_segment_number++;
+                        pls->segment_boundary_position += pls->segments[pls->reported_segment_number - pls->start_seq_no]->actual_size;
+                    }
                 }
                 cur_seq_no = pls->reported_segment_number;
             }
