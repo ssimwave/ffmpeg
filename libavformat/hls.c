@@ -515,8 +515,8 @@ static struct segment *new_init_section(struct playlist *pls,
         sec->size = -1;
     }
 
-    // Actual Segment Size
-    sec->actual_size = get_actual_segment_size(pls, sec);
+    // set later
+    sec->actual_size = -1;
 
     dynarray_add(&pls->init_sections, &pls->n_init_sections, sec);
 
