@@ -252,8 +252,8 @@ static int64_t get_actual_segment_size(struct playlist *pls, struct segment* seg
     if (s->io_open(s, &pb, seg->url, AVIO_FLAG_READ, &opts) >= 0) {
         actual_size = avio_size(pb);
     }
+    ff_format_io_close(s, &pb);
     av_dict_free(&opts);
-    s->io_close(s, pb);
     av_log(s, AV_LOG_DEBUG, "Segment %s, size %ld\n", seg->url, actual_size);
     return actual_size;
 }
