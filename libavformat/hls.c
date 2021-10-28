@@ -2390,7 +2390,7 @@ static int hls_read_packet(AVFormatContext *s, AVPacket *pkt)
             /* If the playlist is VOD then let's cap it to the number of segments */
             if (pls->finished) {
                 if (pkt->pos >= pls->segment_boundary_position + pls->init_sec_buf_read_offset) {
-                    if (pls->reported_segment_number + 1 < pls->n_segments) {
+                    if ((pls->reported_segment_number - pls->start_seq_no)) + 1 < pls->n_segments) {
                         pls->reported_segment_number++;
                         pls->segment_boundary_position += pls->segments[pls->reported_segment_number - pls->start_seq_no]->actual_size;
                     }
