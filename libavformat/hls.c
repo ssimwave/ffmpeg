@@ -1395,7 +1395,7 @@ static int open_input(HLSContext *c, struct playlist *pls, struct segment *seg, 
         }
         ret = 0;
     } else {
-        ret = open_url(pls->parent, in, seg->url, &c->avio_opts, opts, &is_http);
+        ret = open_url(pls->parent, in, seg->url, &c->avio_opts, opts, &is_http, pls->main_streams, pls->n_main_streams);
     }
 
     /* Seek to the requested position. If this was a HTTP request, the offset
@@ -2133,7 +2133,7 @@ static int hls_read_header(AVFormatContext *s)
         if (seg && seg->key_type == KEY_SAMPLE_AES && pls->n_renditions > 0 &&
             pls->renditions[0]->type == AVMEDIA_TYPE_AUDIO) {
             uint8_t buf[HLS_MAX_ID3_TAGS_DATA_LEN];
-            if ((ret = avio_read(&pls->pb.pub, buf, HLS_MAX_ID3_TAGS_DATA_LEN)) < 0) {
+            if ((ret = avio_read(&pls->pb, buf, HLS_MAX_ID3_TAGS_DATA_LEN)) < 0) {
                 /* Fail if error was not end of file */
                 if (ret != AVERROR_EOF) {
                     avformat_free_context(pls->ctx);
@@ -2152,11 +2152,11 @@ static int hls_read_header(AVFormatContext *s)
             pls->cur_seg_offset = 0;
             pls->cur_init_section = NULL;
             /* Reset EOF flag */
-            pls->pb.pub.eof_reached = 0;
+            pls->pb.eof_reached = 0;
             /* Clear any buffered data */
-            pls->pb.pub.buf_end = pls->pb.pub.buf_ptr = pls->pb.pub.buffer;
+            pls->pb.buf_end = pls->pb.buf_ptr = pls->pb.buffer;
             /* Reset the position */
-            pls->pb.pub.pos = 0;
+            pls->pb.pos = 0;
         }
 
         /*
@@ -2174,7 +2174,7 @@ static int hls_read_header(AVFormatContext *s)
             pls->ctx->max_analyze_duration = s->max_analyze_duration > 0 ? s->max_analyze_duration : 4 * AV_TIME_BASE;
             pls->ctx->interrupt_callback = s->interrupt_callback;
             url = av_strdup(pls->segments[0]->url);
-            ret = av_probe_input_buffer(&pls->pb.pub, &in_fmt, url, NULL, 0, 0);
+            ret = av_probe_input_buffer(&pls->pb, &in_fmt, url, NULL, 0, 0);
             if (ret < 0) {
                 /* Free the ctx - it isn't initialized properly at this point,
                 * so avformat_close_input shouldn't be called. If
@@ -2205,7 +2205,7 @@ static int hls_read_header(AVFormatContext *s)
             }
         }
 
-        pls->ctx->pb       = &pls->pb.pub;
+        pls->ctx->pb       = &pls->pb;
         pls->ctx->io_open  = nested_io_open;
         pls->ctx->flags   |= s->flags & ~AVFMT_FLAG_CUSTOM_IO;
 
@@ -2376,7 +2376,7 @@ static int hls_read_packet(AVFormatContext *s, AVPacket *pkt)
                 int64_t ts_diff;
                 AVRational tb;
                 struct segment *seg = NULL;
-                ret = av_read_frame(pls->ctx, pls->pkt);
+                ret = av_read_frame(pls->ctx, &pls->pkt);
                 if (ret < 0) {
                     if (!avio_feof(&pls->pb.pub) && ret != AVERROR_EOF)
                         return ret;
@@ -2396,10 +2396,10 @@ static int hls_read_packet(AVFormatContext *s, AVPacket *pkt)
 
                 seg = current_segment(pls);
                 if (seg && seg->key_type == KEY_SAMPLE_AES && !strstr(pls->ctx->iformat->name, "mov")) {
-                    enum AVCodecID codec_id = pls->ctx->streams[pls->pkt->stream_index]->codecpar->codec_id;
+                    enum AVCodecID codec_id = pls->ctx->streams[pls->pkt.stream_index]->codecpar->codec_id;
                     memcpy(c->crypto_ctx.iv, seg->iv, sizeof(seg->iv));
                     memcpy(c->crypto_ctx.key, pls->key, sizeof(pls->key));
-                    ff_hls_senc_decrypt_frame(codec_id, &c->crypto_ctx, pls->pkt);
+                    ff_hls_senc_decrypt_frame(codec_id, &c->crypto_ctx, &pls->pkt);
                 }
 
                 if (pls->seek_timestamp == AV_NOPTS_VALUE)
