@@ -246,6 +246,8 @@ typedef struct HLSContext {
     HLSCryptoContext  crypto_ctx;
     int selected_variant_index;
     int variant_count;
+    char *sample_aes_iv;
+    char *sample_aes_cek_location;
 } HLSContext;
 
 static int64_t get_actual_segment_size(struct playlist *pls, struct segment* seg) {
@@ -910,6 +912,17 @@ static int parse_playlist(HLSContext *c, const char *url,
             if (!strncmp(info.iv, "0x", 2) || !strncmp(info.iv, "0X", 2)) {
                 ff_hex_to_data(iv, info.iv + 2);
                 has_iv = 1;
+            }
+
+            if (c->sample_aes_iv && (strcmp(c->sample_aes_iv, "") != 0)) {
+                ff_hex_to_data(iv, c->sample_aes_iv);
+                has_iv = 1;
+                av_log(c->ctx, 0, "Overwrote IV with input 0x%x\n", iv);
+            }
+
+            if (c->sample_aes_cek_location && (strcmp(c->sample_aes_cek_location, "") != 0)) {
+                strcpy(info.uri, c->sample_aes_cek_location);
+                av_log(c->ctx, 0, "Overwrote URI with input %s\n", info.uri);
             }
             av_strlcpy(key, info.uri, sizeof(key));
         } else if (av_strstart(line, "#EXT-X-MEDIA:", &ptr)) {
@@ -2652,6 +2665,12 @@ static const AVOption hls_options[] = {
     {"selected_variant_index", "selected index of EXT-X-STREAM-INF",
         OFFSET(selected_variant_index), AV_OPT_TYPE_INT,
         {.i64 = -1}, INT_MIN, INT_MAX, FLAGS},
+    {"sample_aes_iv", "IV for Sample AES stream",
+        OFFSET(sample_aes_iv), AV_OPT_TYPE_STRING,
+        {.str = ""}, 0, 0, FLAGS},
+    {"sample_aes_cek_location", "URI of the location of the Sample AES stream",
+        OFFSET(sample_aes_cek_location), AV_OPT_TYPE_STRING,
+        {.str = ""}, 0, 0, FLAGS},
     {NULL}
 };
 
