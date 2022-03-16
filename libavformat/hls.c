@@ -1421,7 +1421,7 @@ static int open_input(HLSContext *c, struct playlist *pls, struct segment *seg, 
         }
         ret = 0;
     } else {
-        ret = open_url(pls->parent, in, seg->url, &c->avio_opts, opts, &is_http);
+        ret = open_url(pls->parent, in, seg->url, &c->avio_opts, opts, &is_http, pls->main_streams, pls->n_main_streams);
     }
 
     /* Seek to the requested position. If this was a HTTP request, the offset
@@ -2513,7 +2513,7 @@ static int hls_read_packet(AVFormatContext *s, AVPacket *pkt)
                 }
                 cur_seq_no = pls->reported_segment_number;
             }
-            av_log(c, AV_LOG_DEBUG, "Segment %ld (cur %d) pkt position %ld next_boundary %ld\n",
+            av_log(c, AV_LOG_DEBUG, "Segment %ld (cur %ld) pkt position %ld next_boundary %ld\n",
                     pls->reported_segment_number, pls->cur_seq_no, pkt->pos, pls->segment_boundary_position);
 
             av_dict_set_int(&metadata_dict, "segNumber", cur_seq_no, 0);
