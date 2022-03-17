@@ -2782,7 +2782,7 @@ static int hls_decode_entry_tiles(AVCodecContext *avctxt, void *input_tile, int 
         int y_ctb = (ctb_addr_rs / s->ps.sps->ctb_width) << s->ps.sps->log2_ctb_size;
 
         hls_decode_neighbour(s, x_ctb, y_ctb, ctb_addr_ts);
-        ret = ff_hevc_cabac_init(s, ctb_addr_ts);
+        ret = ff_hevc_cabac_init(s, ctb_addr_ts, 0);
         if (ret < 0)
             goto error;
 
@@ -2816,8 +2816,6 @@ error:
     s->tab_slice_address[ctb_addr_rs] = -1;
     return ret;
 }
-
-static int slicecount = 0;
 
 static int hls_slice_data_tiles(HEVCContext *s, const H2645NAL *nal)
 {
