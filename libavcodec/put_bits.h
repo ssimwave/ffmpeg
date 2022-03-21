@@ -206,7 +206,7 @@ static inline void put_bits_no_assert(PutBitContext *s, int n, BitBuf value)
 #ifdef BITSTREAM_WRITER_LE
     bit_buf |= value << (BUF_BITS - bit_left);
     if (n >= bit_left) {
-        if (s->buf_end - s->buf_ptr >= sizeof(BitBuf)) {
+        if ((size_t)(s->buf_end - s->buf_ptr) >= sizeof(BitBuf)) {
             AV_WLBUF(s->buf_ptr, bit_buf);
             s->buf_ptr += sizeof(BitBuf);
         } else {
@@ -224,7 +224,7 @@ static inline void put_bits_no_assert(PutBitContext *s, int n, BitBuf value)
     } else {
         bit_buf   <<= bit_left;
         bit_buf    |= value >> (n - bit_left);
-        if (s->buf_end - s->buf_ptr >= sizeof(BitBuf)) {
+        if ((size_t)(s->buf_end - s->buf_ptr) >= sizeof(BitBuf)) {
             AV_WBBUF(s->buf_ptr, bit_buf);
             s->buf_ptr += sizeof(BitBuf);
         } else {
@@ -262,7 +262,7 @@ static inline void put_bits_le(PutBitContext *s, int n, BitBuf value)
 
     bit_buf |= value << (BUF_BITS - bit_left);
     if (n >= bit_left) {
-        if (s->buf_end - s->buf_ptr >= sizeof(BitBuf)) {
+        if ((size_t)(s->buf_end - s->buf_ptr) >= sizeof(BitBuf)) {
             AV_WLBUF(s->buf_ptr, bit_buf);
             s->buf_ptr += sizeof(BitBuf);
         } else {
@@ -303,7 +303,7 @@ static void av_unused put_bits32(PutBitContext *s, uint32_t value)
 
 #ifdef BITSTREAM_WRITER_LE
     bit_buf |= (BitBuf)value << (BUF_BITS - bit_left);
-    if (s->buf_end - s->buf_ptr >= sizeof(BitBuf)) {
+    if ((size_t)(s->buf_end - s->buf_ptr) >= sizeof(BitBuf)) {
         AV_WLBUF(s->buf_ptr, bit_buf);
         s->buf_ptr += sizeof(BitBuf);
     } else {
@@ -314,7 +314,7 @@ static void av_unused put_bits32(PutBitContext *s, uint32_t value)
 #else
     bit_buf     = (uint64_t)bit_buf << bit_left;
     bit_buf    |= (BitBuf)value >> (BUF_BITS - bit_left);
-    if (s->buf_end - s->buf_ptr >= sizeof(BitBuf)) {
+    if ((size_t)(s->buf_end - s->buf_ptr) >= sizeof(BitBuf)) {
         AV_WBBUF(s->buf_ptr, bit_buf);
         s->buf_ptr += sizeof(BitBuf);
     } else {
