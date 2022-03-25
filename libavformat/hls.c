@@ -2368,7 +2368,7 @@ static int hls_read_packet(AVFormatContext *s, AVPacket *pkt)
     int ret, i, minplaylist = -1;
     AVDictionary* metadata_dict = NULL;
     uint8_t* metadata_dict_packed = NULL;
-    int metadata_dict_size = 0;
+    size_t metadata_dict_size = 0;
     int relative_seq_no = 0;
 
     recheck_discard_flags(s, c->first_packet);
@@ -2503,7 +2503,7 @@ static int hls_read_packet(AVFormatContext *s, AVPacket *pkt)
         /* Segment metadata */
         {
             int cur_seq_no = pls->cur_seq_no;
-            /* If the playlist is VOD then let's cap it to the number of segments */
+            // If the playlist is VOD then let's cap it to the number of segments
             if (pls->finished) {
                 if (pkt->pos >= pls->segment_boundary_position + pls->init_sec_buf_read_offset) {
                     if ((pls->reported_segment_number - pls->start_seq_no) + 1 < pls->n_segments) {

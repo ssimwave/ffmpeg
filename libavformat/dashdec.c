@@ -2316,7 +2316,7 @@ static int dash_read_packet(AVFormatContext *s, AVPacket *pkt)
     AVDictionary* metadata_dict = NULL;
     uint8_t* metadata_dict_packed = NULL;
     DASHContext *c = s->priv_data;
-    int metadata_dict_size = 0;
+    size_t metadata_dict_size = 0;
     int ret = 0, i;
     int64_t mints = 0;
     struct representation *cur = NULL;

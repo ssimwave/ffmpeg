@@ -28,7 +28,8 @@
 static int setup_side_data_entry(AVPacket* avpkt)
 {
     const uint8_t *data_name = NULL;
-    int ret = 0, bytes;
+    int ret = 0;
+    size_t bytes = 0;
     uint8_t *extra_data = NULL;
 
 

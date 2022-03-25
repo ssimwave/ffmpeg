@@ -50,7 +50,7 @@ typedef struct FLVContext {
     int dump_full_metadata;   ///< Dump full metadata of the onMetadata
     int wrong_dts;        ///< wrong dts due to negative cts
     uint8_t *new_extradata[FLV_STREAM_TYPE_NB];
-    int new_extradata_size[FLV_STREAM_TYPE_NB];
+    size_t new_extradata_size[FLV_STREAM_TYPE_NB];
     int last_sample_rate;
     int last_channels;
     struct {
