@@ -551,7 +551,14 @@ int ffurl_read2(void *urlcontext, uint8_t *buf, int size)
 
     if (!(h->flags & AVIO_FLAG_READ))
         return AVERROR(EIO);
-    return retry_transfer_wrapper(h, buf, NULL, size, 1, 1);
+
+
+    int len = retry_transfer_wrapper(h, buf, NULL, size, 1, 1);
+    if (h->mpegts_parser_injection != NULL){
+        h->mpegts_parser_injection(h->mpegts_parser_injection_context, buf, len, 0);
+    }
+
+    return len;
 }
 
 int ffurl_read_complete(URLContext *h, unsigned char *buf, int size)
