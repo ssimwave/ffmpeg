@@ -1260,7 +1260,7 @@ static int context_init_threaded(SwsContext *c,
     int ret;
 
     ret = avpriv_slicethread_create(&c->slicethread, (void*)c,
-                                    ff_sws_slice_worker, NULL, c->nb_threads);
+                                    ff_sws_slice_worker, NULL, NULL, c->nb_threads);
     if (ret == AVERROR(ENOSYS)) {
         c->nb_threads = 1;
         return 0;
