@@ -1195,7 +1195,6 @@ static int open_input_file(OptionsContext *o, const char *filename)
     if (scan_all_pmts_set)
         av_dict_set(&o->g->format_opts, "scan_all_pmts", NULL, AV_DICT_MATCH_CASE);
     remove_avoptions(&o->g->format_opts, o->g->codec_opts);
-    assert_avoptions(o->g->format_opts);
 
     /* apply forced codec ids */
     for (i = 0; i < ic->nb_streams; i++)

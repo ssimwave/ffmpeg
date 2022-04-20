@@ -652,7 +652,6 @@ void term_exit(void);
 void show_usage(void);
 
 void remove_avoptions(AVDictionary **a, AVDictionary *b);
-void assert_avoptions(AVDictionary *m);
 
 int guess_input_channel_layout(InputStream *ist);
 
