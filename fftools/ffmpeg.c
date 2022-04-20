@@ -676,15 +676,6 @@ void remove_avoptions(AVDictionary **a, AVDictionary *b)
     }
 }
 
-void assert_avoptions(AVDictionary *m)
-{
-    const AVDictionaryEntry *t;
-    if ((t = av_dict_get(m, "", NULL, AV_DICT_IGNORE_SUFFIX))) {
-        av_log(NULL, AV_LOG_FATAL, "Option %s not found.\n", t->key);
-        exit_program(1);
-    }
-}
-
 static void abort_codec_experimental(const AVCodec *c, int encoder)
 {
     exit_program(1);
@@ -2928,7 +2919,6 @@ static int init_input_stream(int ist_index, char *error, int error_len)
                      ist->file_index, ist->st->index, av_err2str(ret));
             return ret;
         }
-        assert_avoptions(ist->decoder_opts);
     }
 
     ist->next_pts = AV_NOPTS_VALUE;
@@ -2968,7 +2958,6 @@ static int check_init_output_file(OutputFile *of, int file_index)
                file_index, av_err2str(ret));
         return ret;
     }
-    //assert_avoptions(of->opts);
     of->header_written = 1;
 
     av_dump_format(of->ctx, file_index, of->ctx->url, 1);
@@ -3503,7 +3492,6 @@ static int init_output_stream(OutputStream *ost, AVFrame *frame,
             !(ost->enc->capabilities & AV_CODEC_CAP_VARIABLE_FRAME_SIZE))
             av_buffersink_set_frame_size(ost->filter->filter,
                                             ost->enc_ctx->frame_size);
-        assert_avoptions(ost->encoder_opts);
         if (ost->enc_ctx->bit_rate && ost->enc_ctx->bit_rate < 1000 &&
             ost->enc_ctx->codec_id != AV_CODEC_ID_CODEC2 /* don't complain about 700 bit/s modes */)
             av_log(NULL, AV_LOG_WARNING, "The bitrate parameter is set too low."
