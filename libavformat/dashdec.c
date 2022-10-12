@@ -1808,14 +1808,18 @@ static int open_input(DASHContext *c, struct representation *pls, struct fragmen
 
     // SSIMWAVE
     {
-        URLContext* urlCtx;
+        AVDictionary *tmpOpts = NULL;
+        URLContext* urlCtx = NULL;
+
+        av_dict_copy(&tmpOpts, c->avio_opts, 0);
         // Calculating Segment Size (in Bytes). Using ffurl_seek is much faster than avio_size
-        if (ffurl_open_whitelist(&urlCtx, url, 0, NULL, NULL, NULL, NULL, NULL) >= 0) {
+        if (ffurl_open_whitelist(&urlCtx, url, 0, NULL, &tmpOpts, NULL, NULL, NULL) >= 0) {
             seg->size = ffurl_seek(urlCtx, 0, AVSEEK_SIZE);
         }
         else {
             seg->size = -1;
         }
+        av_dict_free(&tmpOpts);
         ffurl_close(urlCtx);
         av_log(NULL, AV_LOG_DEBUG, "Seg: url: %s,  size = %"PRId64"\n", url, seg->size);
     }
