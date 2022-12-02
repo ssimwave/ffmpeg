@@ -2513,6 +2513,9 @@ static int hls_read_packet(AVFormatContext *s, AVPacket *pkt)
                 }
                 cur_seq_no = pls->reported_segment_number;
             }
+            else {
+                pls->reported_segment_number = cur_seq_no;
+            }
             av_log(c, AV_LOG_DEBUG, "Segment %ld (cur %ld) pkt position %ld next_boundary %ld\n",
                     pls->reported_segment_number, pls->cur_seq_no, pkt->pos, pls->segment_boundary_position);
 
