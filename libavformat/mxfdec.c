@@ -271,6 +271,19 @@ typedef struct MXFEssenceContainerData {
     int body_sid;
 } MXFEssenceContainerData;
 
+typedef struct MXFPHDRMetadataTrackSubDescriptor {
+    MXFMetadataSet meta;
+    UID package_uid;
+    uint32_t source_track_id;
+    uint32_t simple_payload_id;
+} MXFPHDRMetadataTrackSubDescriptor;
+
+typedef struct MXFPHDRDoViGlobalMetadata {
+    MXFMetadataSet meta;
+    size_t length;
+    char* data;
+} MXFPHDRDoViGlobalMetadata;
+
 /* decoded index table */
 typedef struct MXFIndexTable {
     int index_sid;
@@ -309,6 +322,7 @@ typedef struct MXFContext {
     int nb_index_tables;
     MXFIndexTable *index_tables;
     int eia608_extract;
+    int dovi_metadata_extract;
 } MXFContext;
 
 /* NOTE: klv_offset is not set (-1) for local keys */
@@ -361,6 +375,13 @@ static const uint8_t mxf_mastering_display_uls[4][16] = {
     FF_MXF_MasteringDisplayMaximumLuminance,
     FF_MXF_MasteringDisplayMinimumLuminance,
 };
+
+static const uint8_t mxf_phdr_image_metadata_wrapping_frame[]   = { 0x06,0x0e,0x2b,0x34,0x04,0x01,0x01,0x05,0x0e,0x09,0x06,0x07,0x01,0x01,0x01,0x01 };
+static const uint8_t mxf_phdr_image_metadata_item[]             = { 0x06,0x0e,0x2b,0x34,0x01,0x02,0x01,0x05,0x0e,0x09,0x06,0x07,0x01,0x01,0x01,0x00 };
+static const uint8_t mxf_phdr_data_definition[]                 = { 0x06,0x0e,0x2b,0x34,0x01,0x01,0x01,0x05,0x0e,0x09,0x06,0x07,0x01,0x01,0x01,0x04 };
+static const uint8_t mxf_phdr_source_track_id[]                 = { 0x06,0x0e,0x2b,0x34,0x01,0x01,0x01,0x05,0x0e,0x09,0x06,0x07,0x01,0x01,0x01,0x05 };
+static const uint8_t mxf_phdr_simple_payload_sid[]              = { 0x06,0x0e,0x2b,0x34,0x01,0x01,0x01,0x05,0x0e,0x09,0x06,0x07,0x01,0x01,0x01,0x06 };
+static const uint8_t mxf_phdr_dovi_global_metadata[]            = { 0x06,0x0e,0x2b,0x34,0x01,0x01,0x01,0x0c,0x0d,0x01,0x05,0x09,0x01,0x00,0x00,0x00 };
 
 #define IS_KLV_KEY(x, y) (!memcmp(x, y, sizeof(y)))
 
@@ -771,6 +792,7 @@ static int mxf_read_partition_pack(void *arg, AVIOContext *pb, int tag, int size
         return AVERROR_INVALIDDATA;
     }
     nb_essence_containers = avio_rb32(pb);
+
 
     if (partition->type == Header) {
         char str[36];
@@ -3158,6 +3180,39 @@ static int mxf_read_preface_metadata(void *arg, AVIOContext *pb, int tag, int si
     return 0;
 }
 
+static int mxf_read_phdr_metadata_track_sub_descriptor(void *arg, AVIOContext *pb, int tag, int size, UID uid, int64_t klv_offset)
+{
+    MXFPHDRMetadataTrackSubDescriptor *phdr_metadata_track_sub_descriptor = arg;
+
+    if (IS_KLV_KEY(uid, mxf_phdr_source_track_id)) {
+        phdr_metadata_track_sub_descriptor->source_track_id = avio_rb32(pb);
+        av_log(NULL, AV_LOG_TRACE, "PHDR source track id %u\n", phdr_metadata_track_sub_descriptor->source_track_id);
+    }
+    else if (IS_KLV_KEY(uid, mxf_phdr_simple_payload_sid)) {
+        phdr_metadata_track_sub_descriptor->simple_payload_id = avio_rb32(pb);
+        av_log(NULL, AV_LOG_TRACE, "PHDR payload id %u\n", phdr_metadata_track_sub_descriptor->simple_payload_id);
+    }
+
+    return 0;
+}
+
+static int mxf_read_phdr_dovi_global_metadata(void *arg, AVIOContext *pb, int tag, int size, UID uid, int64_t klv_offset)
+{
+    // TODO verify the body SID?
+    // TODO only extract when asked to
+    MXFPHDRDoViGlobalMetadata *phdr_dovi_global_metadata = arg;
+    int read_res = 0;
+
+    phdr_dovi_global_metadata->data = av_mallocz(size);
+    phdr_dovi_global_metadata->length = size;
+
+    read_res = avio_read(pb, phdr_dovi_global_metadata->data, size);
+
+    av_log(NULL, AV_LOG_TRACE, "PHDR global data: read result %d, read %zu bytes\n", read_res, phdr_dovi_global_metadata->length);
+    av_log(NULL, AV_LOG_TRACE, "PHDR global data body: %s", phdr_dovi_global_metadata->data);
+    return read_res;
+}
+
 static const MXFMetadataReadTableEntry mxf_metadata_read_table[] = {
     { { 0x06,0x0e,0x2b,0x34,0x02,0x05,0x01,0x01,0x0d,0x01,0x02,0x01,0x01,0x05,0x01,0x00 }, mxf_read_primer_pack },
     { { 0x06,0x0e,0x2b,0x34,0x02,0x05,0x01,0x01,0x0d,0x01,0x02,0x01,0x01,0x02,0x01,0x00 }, mxf_read_partition_pack },
@@ -3168,6 +3223,7 @@ static const MXFMetadataReadTableEntry mxf_metadata_read_table[] = {
     { { 0x06,0x0e,0x2b,0x34,0x02,0x05,0x01,0x01,0x0d,0x01,0x02,0x01,0x01,0x03,0x02,0x00 }, mxf_read_partition_pack },
     { { 0x06,0x0e,0x2b,0x34,0x02,0x05,0x01,0x01,0x0d,0x01,0x02,0x01,0x01,0x03,0x03,0x00 }, mxf_read_partition_pack },
     { { 0x06,0x0e,0x2b,0x34,0x02,0x05,0x01,0x01,0x0d,0x01,0x02,0x01,0x01,0x03,0x04,0x00 }, mxf_read_partition_pack },
+    { { 0x06,0x0e,0x2b,0x34,0x02,0x05,0x01,0x01,0x0d,0x01,0x02,0x01,0x01,0x03,0x11,0x00 }, mxf_read_partition_pack },
     { { 0x06,0x0e,0x2b,0x34,0x02,0x05,0x01,0x01,0x0d,0x01,0x02,0x01,0x01,0x04,0x02,0x00 }, mxf_read_partition_pack },
     { { 0x06,0x0e,0x2b,0x34,0x02,0x05,0x01,0x01,0x0d,0x01,0x02,0x01,0x01,0x04,0x04,0x00 }, mxf_read_partition_pack },
     { { 0x06,0x0e,0x2b,0x34,0x02,0x53,0x01,0x01,0x0d,0x01,0x01,0x01,0x01,0x01,0x2f,0x00 }, mxf_read_preface_metadata },
@@ -3200,6 +3256,9 @@ static const MXFMetadataReadTableEntry mxf_metadata_read_table[] = {
     { { 0x06,0x0e,0x2b,0x34,0x02,0x53,0x01,0x01,0x0d,0x01,0x04,0x01,0x02,0x02,0x00,0x00 }, mxf_read_cryptographic_context, sizeof(MXFCryptoContext), CryptoContext },
     { { 0x06,0x0e,0x2b,0x34,0x02,0x53,0x01,0x01,0x0d,0x01,0x02,0x01,0x01,0x10,0x01,0x00 }, mxf_read_index_table_segment, sizeof(MXFIndexTableSegment), IndexTableSegment },
     { { 0x06,0x0e,0x2b,0x34,0x02,0x53,0x01,0x01,0x0d,0x01,0x01,0x01,0x01,0x01,0x23,0x00 }, mxf_read_essence_container_data, sizeof(MXFEssenceContainerData), EssenceContainerData },
+    { { 0x06,0x0e,0x2b,0x34,0x02,0x53,0x01,0x05,0x0e,0x09,0x06,0x07,0x01,0x01,0x01,0x03 }, mxf_read_phdr_metadata_track_sub_descriptor, sizeof(MXFPHDRMetadataTrackSubDescriptor), PHDRMetadataTrackSubDescriptor },
+    { { 0x06,0x0e,0x2b,0x34,0x01,0x01,0x01,0x0c,0x0d,0x01,0x05,0x09,0x01,0x00,0x00,0x00 }, mxf_read_phdr_dovi_global_metadata, sizeof(MXFPHDRDoViGlobalMetadata), PHDRDoViGlobalData },
+
     { { 0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00 }, NULL, 0, AnyType },
 };
 
@@ -3225,6 +3284,10 @@ static int mxf_read_local_tags(MXFContext *mxf, KLVPacket *klv, MXFMetadataReadF
     uint64_t klv_end = avio_tell(pb) + klv->length;
     MXFMetadataSet *meta;
     void *ctx;
+
+    if (type == PHDRMetadataTrackSubDescriptor) {
+        av_log(mxf->fc, AV_LOG_TRACE, "attempt to read phdr\n");
+    }
 
     if (ctx_size) {
         meta = av_mallocz(ctx_size);
@@ -3731,7 +3794,7 @@ static int mxf_read_header(AVFormatContext *s)
             }
         }
         if (!metadata->read) {
-            av_log(s, AV_LOG_VERBOSE, "Dark key " PRIxUID "\n",
+            av_log(s, AV_LOG_VERBOSE, "testing Dark key " PRIxUID "\n",
                             UID_ARG(klv.key));
             avio_skip(s->pb, klv.length);
         }
@@ -4219,6 +4282,9 @@ static int mxf_read_seek(AVFormatContext *s, int stream_index, int64_t sample_ti
 static const AVOption options[] = {
     { "eia608_extract", "extract eia 608 captions from s436m track",
       offsetof(MXFContext, eia608_extract), AV_OPT_TYPE_BOOL, {.i64 = 0}, 0, 1,
+      AV_OPT_FLAG_DECODING_PARAM },
+    { "dovi_metadata_extract", "extract Dolby Vision metadata",
+      offsetof(MXFContext, dovi_metadata_extract), AV_OPT_TYPE_BOOL, {.i64 = 0}, 0, 1,
       AV_OPT_FLAG_DECODING_PARAM },
     { NULL },
 };
