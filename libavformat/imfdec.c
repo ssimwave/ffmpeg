@@ -121,6 +121,7 @@ typedef struct IMFContext {
     char *asset_map_paths;
     AVIOInterruptCB *interrupt_callback;
     AVDictionary *avio_opts;
+    AVDictionary *mxf_format_options;
     FFIMFCPL *cpl;
     IMFAssetLocatorMap asset_locator_map;
     uint32_t track_count;
@@ -381,6 +382,7 @@ static int open_track_resource_context(AVFormatContext *s,
     track_resource->ctx->io_open = s->io_open;
     track_resource->ctx->io_close2 = s->io_close2;
     track_resource->ctx->flags |= s->flags & ~AVFMT_FLAG_CUSTOM_IO;
+    track_resource->ctx->opaque = s->opaque;
 
     if ((ret = ff_copy_whiteblacklists(track_resource->ctx, s)) < 0)
         goto cleanup;
@@ -389,6 +391,9 @@ static int open_track_resource_context(AVFormatContext *s,
         goto cleanup;
 
     if ((ret = av_dict_copy(&opts, c->avio_opts, 0)) < 0)
+        goto cleanup;
+
+    if ((ret = av_dict_copy(&opts, c->mxf_format_options, 0)) < 0)
         goto cleanup;
 
     ret = avformat_open_input(&track_resource->ctx,
@@ -584,6 +589,13 @@ static int set_context_streams_from_tracks(AVFormatContext *s)
         }
 
         asset_stream->id = i;
+
+        ret = av_dict_copy(&asset_stream->metadata, first_resource_stream->metadata, 0);
+        if (ret < 0) {
+            av_log(s, AV_LOG_ERROR, "Could not copy stream metadata\n");
+            return ret;
+        }
+
         asset_stream->nb_frames = 0;
         avpriv_set_pts_info(asset_stream,
                             first_resource_stream->pts_wrap_bits,
@@ -1000,6 +1012,14 @@ static const AVOption imf_options[] = {
         .type        = AV_OPT_TYPE_STRING,
         .default_val = {.str = NULL},
         .flags       = AV_OPT_FLAG_DECODING_PARAM,
+    },
+    {
+        .name        = "mxf_format_options",
+        .help        = "Set options for internal MXF demuxer",
+        .offset      = offsetof(IMFContext, mxf_format_options),
+        .type        = AV_OPT_TYPE_DICT,
+        .default_val = {.str = NULL},
+        .flags      = AV_OPT_FLAG_DECODING_PARAM,
     },
     {NULL},
 };
