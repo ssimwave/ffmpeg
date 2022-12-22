@@ -283,6 +283,7 @@ typedef struct MXFPHDRDoViGlobalMetadata {
     size_t length;
     char* data;
 } MXFPHDRDoViGlobalMetadata;
+// TODO need to free "data" when the context is destroyed
 
 /* decoded index table */
 typedef struct MXFIndexTable {
@@ -323,6 +324,7 @@ typedef struct MXFContext {
     MXFIndexTable *index_tables;
     int eia608_extract;
     int dovi_metadata_extract;
+    int dovi_metadata_stream_index;
 } MXFContext;
 
 /* NOTE: klv_offset is not set (-1) for local keys */
@@ -377,13 +379,14 @@ static const uint8_t mxf_mastering_display_uls[4][16] = {
 };
 
 static const uint8_t mxf_phdr_image_metadata_wrapping_frame[]   = { 0x06,0x0e,0x2b,0x34,0x04,0x01,0x01,0x05,0x0e,0x09,0x06,0x07,0x01,0x01,0x01,0x01 };
-static const uint8_t mxf_phdr_image_metadata_item[]             = { 0x06,0x0e,0x2b,0x34,0x01,0x02,0x01,0x05,0x0e,0x09,0x06,0x07,0x01,0x01,0x01,0x00 };
+static const uint8_t mxf_phdr_image_metadata_item[]             = { 0x06,0x0e,0x2b,0x34,0x01,0x02,0x01,0x05,0x0e,0x09,0x06,0x07,0x01,0x01,0x01,0x03 };
 static const uint8_t mxf_phdr_data_definition[]                 = { 0x06,0x0e,0x2b,0x34,0x01,0x01,0x01,0x05,0x0e,0x09,0x06,0x07,0x01,0x01,0x01,0x04 };
 static const uint8_t mxf_phdr_source_track_id[]                 = { 0x06,0x0e,0x2b,0x34,0x01,0x01,0x01,0x05,0x0e,0x09,0x06,0x07,0x01,0x01,0x01,0x05 };
 static const uint8_t mxf_phdr_simple_payload_sid[]              = { 0x06,0x0e,0x2b,0x34,0x01,0x01,0x01,0x05,0x0e,0x09,0x06,0x07,0x01,0x01,0x01,0x06 };
 static const uint8_t mxf_phdr_dovi_global_metadata[]            = { 0x06,0x0e,0x2b,0x34,0x01,0x01,0x01,0x0c,0x0d,0x01,0x05,0x09,0x01,0x00,0x00,0x00 };
 
 #define IS_KLV_KEY(x, y) (!memcmp(x, y, sizeof(y)))
+
 
 static void mxf_free_metadataset(MXFMetadataSet **ctx, int freectx)
 {
@@ -427,6 +430,10 @@ static void mxf_free_metadataset(MXFMetadataSet **ctx, int freectx)
         av_freep(&seg->temporal_offset_entries);
         av_freep(&seg->flag_entries);
         av_freep(&seg->stream_offset_entries);
+        break;
+    case PHDRDoViGlobalData:
+        av_freep(&((MXFPHDRDoViGlobalMetadata*)*ctx)->data);
+        break;
     default:
         break;
     }
@@ -1620,6 +1627,7 @@ static const MXFCodecUL mxf_data_essence_container_uls[] = {
     { { 0x06,0x0e,0x2b,0x34,0x04,0x01,0x01,0x09,0x0d,0x01,0x03,0x01,0x02,0x0d,0x00,0x00 }, 16, AV_CODEC_ID_NONE,      "vbi_smpte_436M", 11 },
     { { 0x06,0x0e,0x2b,0x34,0x04,0x01,0x01,0x09,0x0d,0x01,0x03,0x01,0x02,0x0e,0x00,0x00 }, 16, AV_CODEC_ID_NONE, "vbi_vanc_smpte_436M", 11 },
     { { 0x06,0x0e,0x2b,0x34,0x04,0x01,0x01,0x09,0x0d,0x01,0x03,0x01,0x02,0x13,0x01,0x01 }, 16, AV_CODEC_ID_TTML },
+    { { 0x06,0x0e,0x2b,0x34,0x01,0x02,0x01,0x05,0x0e,0x09,0x06,0x07,0x01,0x01,0x01,0x00 }, 16, AV_CODEC_ID_FFMETADATA, "dovi_metadata"},
     { { 0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00 },  0, AV_CODEC_ID_NONE },
 };
 
@@ -2443,6 +2451,98 @@ static int mxf_add_metadata_stream(MXFContext *mxf, MXFTrack *track)
     return 0;
 }
 
+static MXFTrack* mxf_get_dovi_metadata_track(MXFContext* mxf)
+{
+    MXFTrack* dovi_metadata_track = NULL;
+    int64_t track_id = -1;
+
+    for (size_t k = 0; k < mxf->metadata_sets_count; k++) {
+        MXFMetadataSet *metadata = mxf->metadata_sets[k];
+        if (metadata->type == PHDRMetadataTrackSubDescriptor) {
+            track_id = ((MXFPHDRMetadataTrackSubDescriptor*)metadata)->source_track_id;
+            break;
+        }
+    }
+
+    if (-1 == track_id) {
+        // No interleaved Dolby Vision metadata exists
+        return NULL;
+    }
+
+    for (size_t k = 0; k < mxf->metadata_sets_count; k++) {
+        MXFMetadataSet *metadata = mxf->metadata_sets[k];
+        if (metadata->type == Track && (track_id == ((MXFTrack*)(metadata))->track_id)) {
+            dovi_metadata_track = (MXFTrack*)metadata;
+            break;
+        }
+    }
+
+    av_log(NULL, AV_LOG_TRACE, "found in use Dolby Vision metadata track id %" PRIu64 "\n", track_id);
+    return dovi_metadata_track;
+}
+
+static void mxf_add_dovi_metadata_track(MXFContext* mxf)
+{
+    MXFTrack* track = NULL;
+    MXFStructuralComponent *component = NULL;
+    const MXFCodecUL *container_ul = NULL;
+    AVStream *st = NULL;
+
+    if (!(track = mxf_get_dovi_metadata_track(mxf))) {
+        return;
+    }
+
+    if (!(track->sequence = mxf_resolve_strong_ref(mxf, &track->sequence_ref, Sequence))) {
+        av_log(mxf->fc, AV_LOG_ERROR, "could not resolve material track sequence strong ref\n");
+        return;
+    }
+
+    for (size_t j = 0; j < track->sequence->structural_components_count; j++) {
+        component = mxf_resolve_sourceclip(mxf, &track->sequence->structural_components_refs[j]);
+        if (component) {
+            break;
+        }
+    }
+    if (!component)
+        return;
+
+    st = avformat_new_stream(mxf->fc, NULL);
+    if (!st) {
+        av_log(mxf->fc, AV_LOG_ERROR, "could not allocate DoVi metadata stream\n");
+        return;
+    }
+
+    st->codecpar->codec_type = AVMEDIA_TYPE_DATA;
+    st->codecpar->codec_id = AV_CODEC_ID_NONE;
+    st->id = track->track_id;
+
+    if (track->name && track->name[0]) {
+        av_dict_set(&st->metadata, "track_name", track->name, 0);
+    }
+
+    PRINT_KEY(mxf->fc, "essence container ul", track->sequence->data_definition_ul);
+    container_ul = mxf_get_codec_ul(mxf_data_essence_container_uls, &track->sequence->data_definition_ul);
+    if (container_ul->desc) {
+        av_dict_set(&st->metadata, "data_type", container_ul->desc, 0);
+    }
+
+    av_log(NULL, AV_LOG_TRACE, "added in use Dolby Vision metadata track id %u\n", track->track_id);
+
+    if (track->edit_rate.num <= 0 ||
+        track->edit_rate.den <= 0) {
+        av_log(mxf->fc, AV_LOG_WARNING,
+                "Invalid edit rate (%d/%d) found on stream #%d, "
+                "defaulting to 25/1\n",
+                track->edit_rate.num,
+                track->edit_rate.den, st->index);
+        track->edit_rate = (AVRational){25, 1};
+    }
+    avpriv_set_pts_info(st, 64, track->edit_rate.den, track->edit_rate.num);
+
+    st->priv_data = track;
+    mxf->dovi_metadata_stream_index = st->index;
+}
+
 static enum AVColorRange mxf_get_color_range(MXFContext *mxf, MXFDescriptor *descriptor)
 {
     if (descriptor->black_ref_level || descriptor->white_ref_level || descriptor->color_range) {
@@ -3208,8 +3308,13 @@ static int mxf_read_phdr_dovi_global_metadata(void *arg, AVIOContext *pb, int ta
 
     read_res = avio_read(pb, phdr_dovi_global_metadata->data, size);
 
-    av_log(NULL, AV_LOG_TRACE, "PHDR global data: read result %d, read %zu bytes\n", read_res, phdr_dovi_global_metadata->length);
-    av_log(NULL, AV_LOG_TRACE, "PHDR global data body: %s", phdr_dovi_global_metadata->data);
+    if (read_res >= 0) {
+        av_log(NULL, AV_LOG_TRACE, "PHDR global data: read %d bytes\n", read_res);
+        av_log(NULL, AV_LOG_TRACE, "PHDR global data body: %s", phdr_dovi_global_metadata->data);
+    }
+    else {
+        av_log(NULL, AV_LOG_TRACE, "Failed to read PHDR global data: result %d\n", read_res);
+    }
     return read_res;
 }
 
@@ -3811,6 +3916,8 @@ static int mxf_read_header(AVFormatContext *s)
     if ((ret = mxf_parse_structural_metadata(mxf)) < 0)
         return ret;
 
+    mxf_add_dovi_metadata_track(mxf);
+
     for (int i = 0; i < s->nb_streams; i++)
         mxf_handle_missing_index_segment(mxf, s->streams[i]);
 
@@ -3991,6 +4098,7 @@ static int mxf_read_packet(AVFormatContext *s, AVPacket *pkt)
     while (1) {
         int64_t max_data_size;
         int64_t pos = avio_tell(s->pb);
+        int64_t is_phdr = 0;
 
         if (pos < mxf->current_klv_data.next_klv - mxf->current_klv_data.length || pos >= mxf->current_klv_data.next_klv) {
             mxf->current_klv_data = (KLVPacket){{0}};
@@ -4015,9 +4123,10 @@ static int mxf_read_packet(AVFormatContext *s, AVPacket *pkt)
         }
         if (IS_KLV_KEY(klv.key, mxf_essence_element_key) ||
             IS_KLV_KEY(klv.key, mxf_canopus_essence_element_key) ||
-            IS_KLV_KEY(klv.key, mxf_avid_essence_element_key)) {
+            IS_KLV_KEY(klv.key, mxf_avid_essence_element_key) ||
+            (is_phdr = IS_KLV_KEY(klv.key, mxf_phdr_image_metadata_item))) {
             int body_sid = find_body_sid_by_absolute_offset(mxf, klv.offset);
-            int index = mxf_get_stream_index(s, &klv, body_sid);
+            int index = is_phdr ? mxf->dovi_metadata_stream_index : mxf_get_stream_index(s, &klv, body_sid);
             int64_t next_ofs;
             AVStream *st;
             MXFTrack *track;
