@@ -283,7 +283,6 @@ typedef struct MXFPHDRDoViGlobalMetadata {
     size_t length;
     char* data;
 } MXFPHDRDoViGlobalMetadata;
-// TODO need to free "data" when the context is destroyed
 
 /* decoded index table */
 typedef struct MXFIndexTable {
@@ -2481,7 +2480,40 @@ static MXFTrack* mxf_get_dovi_metadata_track(MXFContext* mxf)
     return dovi_metadata_track;
 }
 
-static void mxf_add_dovi_metadata_track(MXFContext* mxf)
+static int mxf_init_dovi_metadata_stream(MXFContext* mxf, AVStream* st)
+{
+    MXFPHDRDoViGlobalMetadata* global_metadata = NULL;
+    AVDictionary* metadata_dict = NULL;
+    char* packed_metadata = NULL;
+    size_t metadata_len = 0;
+    int ret = 0;
+
+    for (size_t k = 0; k < mxf->metadata_sets_count; k++) {
+        MXFMetadataSet *metadata = mxf->metadata_sets[k];
+        if (metadata->type == PHDRDoViGlobalData) {
+            global_metadata = (MXFPHDRDoViGlobalMetadata*)metadata;
+            break;
+        }
+    }
+
+    if (!global_metadata) {
+        return AVERROR_INVALIDDATA;
+    }
+
+    if ((ret = av_dict_set(&metadata_dict, "doViGlobalMetadata", global_metadata->data, 0 /* flags */))) {
+        return ret;
+    }
+
+    packed_metadata = av_packet_pack_dictionary(metadata_dict, &metadata_len);
+    av_dict_free(&metadata_dict);
+    if (!packed_metadata) {
+        return AVERROR(ENOMEM);
+    }
+
+    return av_stream_add_side_data(st, AV_PKT_DATA_STRINGS_METADATA, packed_metadata, metadata_len);
+}
+
+static int mxf_add_dovi_metadata_stream(MXFContext* mxf)
 {
     MXFTrack* track = NULL;
     MXFStructuralComponent *component = NULL;
@@ -2489,12 +2521,12 @@ static void mxf_add_dovi_metadata_track(MXFContext* mxf)
     AVStream *st = NULL;
 
     if (!(track = mxf_get_dovi_metadata_track(mxf))) {
-        return;
+        return 0;
     }
 
     if (!(track->sequence = mxf_resolve_strong_ref(mxf, &track->sequence_ref, Sequence))) {
-        av_log(mxf->fc, AV_LOG_ERROR, "could not resolve material track sequence strong ref\n");
-        return;
+        av_log(mxf->fc, AV_LOG_ERROR, "could not resolve track sequence strong ref\n");
+        return AVERROR_INVALIDDATA;
     }
 
     for (size_t j = 0; j < track->sequence->structural_components_count; j++) {
@@ -2503,13 +2535,15 @@ static void mxf_add_dovi_metadata_track(MXFContext* mxf)
             break;
         }
     }
-    if (!component)
-        return;
+    if (!component) {
+        av_log(mxf->fc, AV_LOG_ERROR, "could not resolve source clip\n");
+        return AVERROR_INVALIDDATA;
+    }
 
     st = avformat_new_stream(mxf->fc, NULL);
     if (!st) {
         av_log(mxf->fc, AV_LOG_ERROR, "could not allocate DoVi metadata stream\n");
-        return;
+        return AVERROR(ENOMEM);
     }
 
     st->codecpar->codec_type = AVMEDIA_TYPE_DATA;
@@ -2519,15 +2553,12 @@ static void mxf_add_dovi_metadata_track(MXFContext* mxf)
     if (track->name && track->name[0]) {
         av_dict_set(&st->metadata, "track_name", track->name, 0);
     }
-
-    PRINT_KEY(mxf->fc, "essence container ul", track->sequence->data_definition_ul);
     container_ul = mxf_get_codec_ul(mxf_data_essence_container_uls, &track->sequence->data_definition_ul);
     if (container_ul->desc) {
         av_dict_set(&st->metadata, "data_type", container_ul->desc, 0);
     }
 
     av_log(NULL, AV_LOG_TRACE, "added in use Dolby Vision metadata track id %u\n", track->track_id);
-
     if (track->edit_rate.num <= 0 ||
         track->edit_rate.den <= 0) {
         av_log(mxf->fc, AV_LOG_WARNING,
@@ -2540,7 +2571,13 @@ static void mxf_add_dovi_metadata_track(MXFContext* mxf)
     avpriv_set_pts_info(st, 64, track->edit_rate.den, track->edit_rate.num);
 
     st->priv_data = track;
+
+    if (mxf_init_dovi_metadata_stream(mxf, st)) {
+        av_log(mxf->fc, AV_LOG_ERROR, "failed to fully initialize DoVi metadata stream\n");
+    }
+
     mxf->dovi_metadata_stream_index = st->index;
+    return 0;
 }
 
 static enum AVColorRange mxf_get_color_range(MXFContext *mxf, MXFDescriptor *descriptor)
@@ -3298,8 +3335,6 @@ static int mxf_read_phdr_metadata_track_sub_descriptor(void *arg, AVIOContext *p
 
 static int mxf_read_phdr_dovi_global_metadata(void *arg, AVIOContext *pb, int tag, int size, UID uid, int64_t klv_offset)
 {
-    // TODO verify the body SID?
-    // TODO only extract when asked to
     MXFPHDRDoViGlobalMetadata *phdr_dovi_global_metadata = arg;
     int read_res = 0;
 
@@ -3916,7 +3951,9 @@ static int mxf_read_header(AVFormatContext *s)
     if ((ret = mxf_parse_structural_metadata(mxf)) < 0)
         return ret;
 
-    mxf_add_dovi_metadata_track(mxf);
+    if (mxf->dovi_metadata_extract) {
+        mxf_add_dovi_metadata_stream(mxf);
+    }
 
     for (int i = 0; i < s->nb_streams; i++)
         mxf_handle_missing_index_segment(mxf, s->streams[i]);
@@ -4126,7 +4163,8 @@ static int mxf_read_packet(AVFormatContext *s, AVPacket *pkt)
             IS_KLV_KEY(klv.key, mxf_avid_essence_element_key) ||
             (is_phdr = IS_KLV_KEY(klv.key, mxf_phdr_image_metadata_item))) {
             int body_sid = find_body_sid_by_absolute_offset(mxf, klv.offset);
-            int index = is_phdr ? mxf->dovi_metadata_stream_index : mxf_get_stream_index(s, &klv, body_sid);
+            int index = (mxf->dovi_metadata_extract && is_phdr) ?
+                mxf->dovi_metadata_stream_index : mxf_get_stream_index(s, &klv, body_sid);
             int64_t next_ofs;
             AVStream *st;
             MXFTrack *track;
@@ -4393,7 +4431,7 @@ static const AVOption options[] = {
       offsetof(MXFContext, eia608_extract), AV_OPT_TYPE_BOOL, {.i64 = 0}, 0, 1,
       AV_OPT_FLAG_DECODING_PARAM },
     { "dovi_metadata_extract", "extract Dolby Vision metadata",
-      offsetof(MXFContext, dovi_metadata_extract), AV_OPT_TYPE_BOOL, {.i64 = 0}, 0, 1,
+      offsetof(MXFContext, dovi_metadata_extract), AV_OPT_TYPE_BOOL, {.i64 = 1}, 0, 1,
       AV_OPT_FLAG_DECODING_PARAM },
     { NULL },
 };
