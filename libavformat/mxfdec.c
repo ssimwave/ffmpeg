@@ -324,6 +324,7 @@ typedef struct MXFContext {
     int eia608_extract;
     int dovi_metadata_extract;
     int dovi_metadata_stream_index;
+    MXFPHDRDoViGlobalMetadata *dovi_global_metadata;
 } MXFContext;
 
 /* NOTE: klv_offset is not set (-1) for local keys */
@@ -429,9 +430,6 @@ static void mxf_free_metadataset(MXFMetadataSet **ctx, int freectx)
         av_freep(&seg->temporal_offset_entries);
         av_freep(&seg->flag_entries);
         av_freep(&seg->stream_offset_entries);
-        break;
-    case PHDRDoViGlobalData:
-        av_freep(&((MXFPHDRDoViGlobalMetadata*)*ctx)->data);
         break;
     default:
         break;
@@ -2482,35 +2480,15 @@ static MXFTrack* mxf_get_dovi_metadata_track(MXFContext* mxf)
 
 static int mxf_init_dovi_metadata_stream(MXFContext* mxf, AVStream* st)
 {
-    MXFPHDRDoViGlobalMetadata* global_metadata = NULL;
-    AVDictionary* metadata_dict = NULL;
-    char* packed_metadata = NULL;
-    size_t metadata_len = 0;
     int ret = 0;
 
-    for (size_t k = 0; k < mxf->metadata_sets_count; k++) {
-        MXFMetadataSet *metadata = mxf->metadata_sets[k];
-        if (metadata->type == PHDRDoViGlobalData) {
-            global_metadata = (MXFPHDRDoViGlobalMetadata*)metadata;
-            break;
-        }
-    }
-
-    if (!global_metadata) {
+    if (!mxf->dovi_global_metadata) {
+        av_log(NULL, AV_LOG_TRACE, "no Dolby Vision global metadata found in metadata sets\n");
         return AVERROR_INVALIDDATA;
     }
 
-    if ((ret = av_dict_set(&metadata_dict, "doViGlobalMetadata", global_metadata->data, 0 /* flags */))) {
-        return ret;
-    }
-
-    packed_metadata = av_packet_pack_dictionary(metadata_dict, &metadata_len);
-    av_dict_free(&metadata_dict);
-    if (!packed_metadata) {
-        return AVERROR(ENOMEM);
-    }
-
-    return av_stream_add_side_data(st, AV_PKT_DATA_STRINGS_METADATA, packed_metadata, metadata_len);
+    ret = av_dict_set(&st->metadata, "dovi_global_metadata", mxf->dovi_global_metadata->data, 0 /* flags */);
+    return ret;
 }
 
 static int mxf_add_dovi_metadata_stream(MXFContext* mxf)
@@ -3335,17 +3313,22 @@ static int mxf_read_phdr_metadata_track_sub_descriptor(void *arg, AVIOContext *p
 
 static int mxf_read_phdr_dovi_global_metadata(void *arg, AVIOContext *pb, int tag, int size, UID uid, int64_t klv_offset)
 {
-    MXFPHDRDoViGlobalMetadata *phdr_dovi_global_metadata = arg;
+    MXFContext *mxf = arg;
     int read_res = 0;
 
-    phdr_dovi_global_metadata->data = av_mallocz(size);
-    phdr_dovi_global_metadata->length = size;
+    mxf->dovi_global_metadata = av_mallocz(sizeof(mxf->dovi_global_metadata));
+    if (!mxf->dovi_global_metadata) {
+        return AVERROR(ENOMEM);
+    }
 
-    read_res = avio_read(pb, phdr_dovi_global_metadata->data, size);
+    mxf->dovi_global_metadata->data = av_mallocz(size);
+    mxf->dovi_global_metadata->length = size;
+
+    read_res = avio_read(pb, mxf->dovi_global_metadata->data, size);
 
     if (read_res >= 0) {
         av_log(NULL, AV_LOG_TRACE, "PHDR global data: read %d bytes\n", read_res);
-        av_log(NULL, AV_LOG_TRACE, "PHDR global data body: %s", phdr_dovi_global_metadata->data);
+        av_log(NULL, AV_LOG_TRACE, "PHDR global data body: %s", mxf->dovi_global_metadata->data);
     }
     else {
         av_log(NULL, AV_LOG_TRACE, "Failed to read PHDR global data: result %d\n", read_res);
@@ -3424,10 +3407,6 @@ static int mxf_read_local_tags(MXFContext *mxf, KLVPacket *klv, MXFMetadataReadF
     uint64_t klv_end = avio_tell(pb) + klv->length;
     MXFMetadataSet *meta;
     void *ctx;
-
-    if (type == PHDRMetadataTrackSubDescriptor) {
-        av_log(mxf->fc, AV_LOG_TRACE, "attempt to read phdr\n");
-    }
 
     if (ctx_size) {
         meta = av_mallocz(ctx_size);
@@ -4275,6 +4254,11 @@ static int mxf_read_close(AVFormatContext *s)
     av_freep(&mxf->metadata_sets);
     av_freep(&mxf->aesc);
     av_freep(&mxf->local_tags);
+
+    if (mxf->dovi_global_metadata) {
+        av_freep(&mxf->dovi_global_metadata->data);
+        av_freep(&mxf->dovi_global_metadata);
+    }
 
     if (mxf->index_tables) {
         for (i = 0; i < mxf->nb_index_tables; i++) {
