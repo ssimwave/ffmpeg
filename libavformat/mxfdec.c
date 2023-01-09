@@ -2487,8 +2487,9 @@ static int mxf_init_dovi_metadata_stream(MXFContext* mxf, AVStream* st)
         return AVERROR_INVALIDDATA;
     }
 
-    ret = av_dict_set(&st->metadata, "dovi_global_metadata", mxf->dovi_global_metadata->data, 0 /* flags */);
-    return ret;
+    //ret = av_dict_set(&st->metadata, "dovi_global_metadata", mxf->dovi_global_metadata->data, 0 /* flags */);
+    //return ret;
+    return 0
 }
 
 static int mxf_add_dovi_metadata_stream(MXFContext* mxf)
