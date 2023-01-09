@@ -2480,16 +2480,15 @@ static MXFTrack* mxf_get_dovi_metadata_track(MXFContext* mxf)
 
 static int mxf_init_dovi_metadata_stream(MXFContext* mxf, AVStream* st)
 {
-    //int ret = 0;
+    int ret = 0;
 
     if (!mxf->dovi_global_metadata) {
         av_log(NULL, AV_LOG_TRACE, "no Dolby Vision global metadata found in metadata sets\n");
         return AVERROR_INVALIDDATA;
     }
 
-    //ret = av_dict_set(&st->metadata, "dovi_global_metadata", mxf->dovi_global_metadata->data, 0 /* flags */);
-    //return ret;
-    return 0;
+    ret = av_dict_set(&st->metadata, "dovi_global_metadata", mxf->dovi_global_metadata->data, 0 /* flags */);
+    return ret;
 }
 
 static int mxf_add_dovi_metadata_stream(MXFContext* mxf)
