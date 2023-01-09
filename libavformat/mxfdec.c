@@ -3316,12 +3316,16 @@ static int mxf_read_phdr_dovi_global_metadata(void *arg, AVIOContext *pb, int ta
     MXFContext *mxf = arg;
     int read_res = 0;
 
-    mxf->dovi_global_metadata = av_mallocz(sizeof(mxf->dovi_global_metadata));
+    mxf->dovi_global_metadata = av_mallocz(sizeof(*mxf->dovi_global_metadata));
     if (!mxf->dovi_global_metadata) {
         return AVERROR(ENOMEM);
     }
 
     mxf->dovi_global_metadata->data = av_mallocz(size);
+    if (!mxf->dovi_global_metadata->data) {
+        return AVERROR(ENOMEM);
+    }
+
     mxf->dovi_global_metadata->length = size;
 
     read_res = avio_read(pb, mxf->dovi_global_metadata->data, size);
@@ -3913,7 +3917,7 @@ static int mxf_read_header(AVFormatContext *s)
             }
         }
         if (!metadata->read) {
-            av_log(s, AV_LOG_VERBOSE, "testing Dark key " PRIxUID "\n",
+            av_log(s, AV_LOG_VERBOSE, "Dark key " PRIxUID "\n",
                             UID_ARG(klv.key));
             avio_skip(s->pb, klv.length);
         }
