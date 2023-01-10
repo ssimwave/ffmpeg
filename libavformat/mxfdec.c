@@ -322,9 +322,9 @@ typedef struct MXFContext {
     int nb_index_tables;
     MXFIndexTable *index_tables;
     int eia608_extract;
-    int dovi_metadata_extract;
-    int dovi_metadata_stream_index;
-    MXFPHDRDoViGlobalMetadata *dovi_global_metadata;
+    int dovi_metadata_extract; /**< Boolean flag to enable extraction of metadata */
+    int dovi_metadata_stream_index; /**< Non-negative integer when a metadata stream (per-frame data) is detected */
+    MXFPHDRDoViGlobalMetadata *dovi_global_metadata; /**< Pointer to cached global metadata */
 } MXFContext;
 
 /* NOTE: klv_offset is not set (-1) for local keys */
@@ -383,7 +383,6 @@ static const uint8_t mxf_phdr_image_metadata_item[]             = { 0x06,0x0e,0x
 static const uint8_t mxf_phdr_data_definition[]                 = { 0x06,0x0e,0x2b,0x34,0x01,0x01,0x01,0x05,0x0e,0x09,0x06,0x07,0x01,0x01,0x01,0x04 };
 static const uint8_t mxf_phdr_source_track_id[]                 = { 0x06,0x0e,0x2b,0x34,0x01,0x01,0x01,0x05,0x0e,0x09,0x06,0x07,0x01,0x01,0x01,0x05 };
 static const uint8_t mxf_phdr_simple_payload_sid[]              = { 0x06,0x0e,0x2b,0x34,0x01,0x01,0x01,0x05,0x0e,0x09,0x06,0x07,0x01,0x01,0x01,0x06 };
-static const uint8_t mxf_phdr_dovi_global_metadata[]            = { 0x06,0x0e,0x2b,0x34,0x01,0x01,0x01,0x0c,0x0d,0x01,0x05,0x09,0x01,0x00,0x00,0x00 };
 
 #define IS_KLV_KEY(x, y) (!memcmp(x, y, sizeof(y)))
 
@@ -2453,6 +2452,7 @@ static MXFTrack* mxf_get_dovi_metadata_track(MXFContext* mxf)
     MXFTrack* dovi_metadata_track = NULL;
     int64_t track_id = -1;
 
+    // Obtain PHDR Metadata track information
     for (size_t k = 0; k < mxf->metadata_sets_count; k++) {
         MXFMetadataSet *metadata = mxf->metadata_sets[k];
         if (metadata->type == PHDRMetadataTrackSubDescriptor) {
@@ -2466,6 +2466,7 @@ static MXFTrack* mxf_get_dovi_metadata_track(MXFContext* mxf)
         return NULL;
     }
 
+    // Obtain the actual MXF track containing presumed Dolby Vision metadata, based on mapped track ID
     for (size_t k = 0; k < mxf->metadata_sets_count; k++) {
         MXFMetadataSet *metadata = mxf->metadata_sets[k];
         if (metadata->type == Track && (track_id == ((MXFTrack*)(metadata))->track_id)) {
@@ -2518,9 +2519,10 @@ static int mxf_add_dovi_metadata_stream(MXFContext* mxf)
         return AVERROR_INVALIDDATA;
     }
 
+    // Create a data stream which can be consumed by a client to obtain per-frame metadata
     st = avformat_new_stream(mxf->fc, NULL);
     if (!st) {
-        av_log(mxf->fc, AV_LOG_ERROR, "could not allocate DoVi metadata stream\n");
+        av_log(mxf->fc, AV_LOG_ERROR, "could not allocate Dolby Vision metadata stream\n");
         return AVERROR(ENOMEM);
     }
 
@@ -2551,9 +2553,10 @@ static int mxf_add_dovi_metadata_stream(MXFContext* mxf)
     st->priv_data = track;
 
     if (mxf_init_dovi_metadata_stream(mxf, st)) {
-        av_log(mxf->fc, AV_LOG_ERROR, "failed to fully initialize DoVi metadata stream\n");
+        av_log(mxf->fc, AV_LOG_ERROR, "failed to fully initialize Dolby Vision metadata stream\n");
     }
 
+    // Cache stream index to make per-packet processing easier later on
     mxf->dovi_metadata_stream_index = st->index;
     return 0;
 }
