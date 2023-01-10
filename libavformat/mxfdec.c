@@ -3321,7 +3321,8 @@ static int mxf_read_phdr_dovi_global_metadata(void *arg, AVIOContext *pb, int ta
         return AVERROR(ENOMEM);
     }
 
-    mxf->dovi_global_metadata->data = av_mallocz(size);
+    // Global metadata is not null terminated, we must do it ourselves to treat as a string when stored in a dictionary
+    mxf->dovi_global_metadata->data = av_mallocz(size + 1);
     if (!mxf->dovi_global_metadata->data) {
         return AVERROR(ENOMEM);
     }
@@ -3329,6 +3330,7 @@ static int mxf_read_phdr_dovi_global_metadata(void *arg, AVIOContext *pb, int ta
     mxf->dovi_global_metadata->length = size;
 
     read_res = avio_read(pb, mxf->dovi_global_metadata->data, size);
+    mxf->dovi_global_metadata->data[size] = '\0';
 
     if (read_res >= 0) {
         av_log(NULL, AV_LOG_TRACE, "PHDR global data: read %d bytes\n", read_res);
