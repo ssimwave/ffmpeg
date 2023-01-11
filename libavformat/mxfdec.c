@@ -4427,7 +4427,7 @@ static const AVOption options[] = {
       offsetof(MXFContext, eia608_extract), AV_OPT_TYPE_BOOL, {.i64 = 0}, 0, 1,
       AV_OPT_FLAG_DECODING_PARAM },
     { "dovi_metadata_extract", "extract Dolby Vision metadata",
-      offsetof(MXFContext, dovi_metadata_extract), AV_OPT_TYPE_BOOL, {.i64 = 1}, 0, 1,
+      offsetof(MXFContext, dovi_metadata_extract), AV_OPT_TYPE_BOOL, {.i64 = 0}, 0, 1,
       AV_OPT_FLAG_DECODING_PARAM },
     { NULL },
 };
