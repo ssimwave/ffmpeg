@@ -3342,7 +3342,7 @@ static int mxf_read_phdr_dovi_global_metadata(void *arg, AVIOContext *pb, int ta
     }
     else {
         av_log(mxf->fc, AV_LOG_TRACE, "Failed to read PHDR global data: result %d\n", read_res);
-        av_freep(&mxf->dovi_global_metadata->data)
+        av_freep(&mxf->dovi_global_metadata->data);
         av_freep(&mxf->dovi_global_metadata);
     }
     return read_res;
