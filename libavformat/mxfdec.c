@@ -4154,12 +4154,14 @@ static int mxf_read_packet(AVFormatContext *s, AVPacket *pkt)
             IS_KLV_KEY(klv.key, mxf_avid_essence_element_key) ||
             (is_phdr = IS_KLV_KEY(klv.key, mxf_phdr_image_metadata_item))) {
             int body_sid = find_body_sid_by_absolute_offset(mxf, klv.offset);
-            int index = (mxf->dovi_metadata_extract && is_phdr) ?
-                mxf->dovi_metadata_stream_index : mxf_get_stream_index(s, &klv, body_sid);
+            int index = is_phdr ? mxf->dovi_metadata_stream_index : mxf_get_stream_index(s, &klv, body_sid);
             int64_t next_ofs;
             AVStream *st;
             MXFTrack *track;
 
+            if (is_phdr && !mxf->dovi_metadata_extract) {
+                goto skip;
+            }
             if (index < 0) {
                 av_log(s, AV_LOG_ERROR,
                        "error getting stream index %"PRIu32"\n",
