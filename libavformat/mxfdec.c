@@ -2475,7 +2475,7 @@ static MXFTrack* mxf_get_dovi_metadata_track(MXFContext* mxf)
         }
     }
 
-    av_log(NULL, AV_LOG_TRACE, "found in use Dolby Vision metadata track id %" PRIu64 "\n", track_id);
+    av_log(mxf->fc, AV_LOG_TRACE, "found in use Dolby Vision metadata track id %" PRIu64 "\n", track_id);
     return dovi_metadata_track;
 }
 
@@ -2484,7 +2484,7 @@ static int mxf_init_dovi_metadata_stream(MXFContext* mxf, AVStream* st)
     int ret = 0;
 
     if (!mxf->dovi_global_metadata) {
-        av_log(NULL, AV_LOG_TRACE, "no Dolby Vision global metadata found in metadata sets\n");
+        av_log(mxf->fc, AV_LOG_TRACE, "no Dolby Vision global metadata found in metadata sets\n");
         return AVERROR_INVALIDDATA;
     }
 
@@ -2527,7 +2527,7 @@ static int mxf_add_dovi_metadata_stream(MXFContext* mxf)
     }
 
     st->codecpar->codec_type = AVMEDIA_TYPE_DATA;
-    st->codecpar->codec_id = AV_CODEC_ID_NONE;
+    st->codecpar->codec_id = AV_CODEC_ID_BIN_DATA;
     st->id = track->track_id;
 
     if (track->name && track->name[0]) {
@@ -2538,7 +2538,7 @@ static int mxf_add_dovi_metadata_stream(MXFContext* mxf)
         av_dict_set(&st->metadata, "data_type", container_ul->desc, 0);
     }
 
-    av_log(NULL, AV_LOG_TRACE, "added in use Dolby Vision metadata track id %u\n", track->track_id);
+    av_log(mxf->fc, AV_LOG_TRACE, "added in use Dolby Vision metadata track id %u\n", track->track_id);
     if (track->edit_rate.num <= 0 ||
         track->edit_rate.den <= 0) {
         av_log(mxf->fc, AV_LOG_WARNING,
@@ -3327,6 +3327,7 @@ static int mxf_read_phdr_dovi_global_metadata(void *arg, AVIOContext *pb, int ta
     // Global metadata is not null terminated, we must do it ourselves to treat as a string when stored in a dictionary
     mxf->dovi_global_metadata->data = av_mallocz(size + 1);
     if (!mxf->dovi_global_metadata->data) {
+        av_freep(&mxf->dovi_global_metadata);
         return AVERROR(ENOMEM);
     }
 
@@ -3336,11 +3337,13 @@ static int mxf_read_phdr_dovi_global_metadata(void *arg, AVIOContext *pb, int ta
     mxf->dovi_global_metadata->data[size] = '\0';
 
     if (read_res >= 0) {
-        av_log(NULL, AV_LOG_TRACE, "PHDR global data: read %d bytes\n", read_res);
-        av_log(NULL, AV_LOG_TRACE, "PHDR global data body: %s", mxf->dovi_global_metadata->data);
+        av_log(mxf->fc, AV_LOG_TRACE, "PHDR global data: read %d bytes\n", read_res);
+        av_log(mxf->fc, AV_LOG_TRACE, "PHDR global data body: %s", mxf->dovi_global_metadata->data);
     }
     else {
-        av_log(NULL, AV_LOG_TRACE, "Failed to read PHDR global data: result %d\n", read_res);
+        av_log(mxf->fc, AV_LOG_TRACE, "Failed to read PHDR global data: result %d\n", read_res);
+        av_freep(&mxf->dovi_global_metadata->data)
+        av_freep(&mxf->dovi_global_metadata);
     }
     return read_res;
 }
