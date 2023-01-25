@@ -1626,7 +1626,7 @@ static const MXFCodecUL mxf_data_essence_container_uls[] = {
     { { 0x06,0x0e,0x2b,0x34,0x04,0x01,0x01,0x09,0x0d,0x01,0x03,0x01,0x02,0x0d,0x00,0x00 }, 16, AV_CODEC_ID_NONE,      "vbi_smpte_436M", 11 },
     { { 0x06,0x0e,0x2b,0x34,0x04,0x01,0x01,0x09,0x0d,0x01,0x03,0x01,0x02,0x0e,0x00,0x00 }, 16, AV_CODEC_ID_NONE, "vbi_vanc_smpte_436M", 11 },
     { { 0x06,0x0e,0x2b,0x34,0x04,0x01,0x01,0x09,0x0d,0x01,0x03,0x01,0x02,0x13,0x01,0x01 }, 16, AV_CODEC_ID_TTML },
-    { { 0x06,0x0e,0x2b,0x34,0x01,0x02,0x01,0x05,0x0e,0x09,0x06,0x07,0x01,0x01,0x01,0x00 }, 16, AV_CODEC_ID_FFMETADATA, "phdr_metadata"},
+    { { 0x06,0x0e,0x2b,0x34,0x01,0x02,0x01,0x05,0x0e,0x09,0x06,0x07,0x01,0x01,0x01,0x00 }, 16, AV_CODEC_ID_FFMETADATA, "dovi_metadata"},
     { { 0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00 },  0, AV_CODEC_ID_NONE },
 };
 
@@ -2526,7 +2526,7 @@ static int mxf_add_phdr_metadata_stream(MXFContext* mxf)
         av_log(mxf->fc, AV_LOG_TRACE, "no PHDR global metadata found in metadata sets\n");
         return AVERROR_INVALIDDATA;
     }
-    av_dict_set(&st->metadata, "phdr_global_metadata", mxf->phdr_global_metadata->data, 0 /* flags */);
+    av_dict_set(&st->metadata, "dovi_global_metadata", mxf->phdr_global_metadata->data, 0 /* flags */);
 
     // Create a data stream which can be consumed by a client to obtain per-frame metadata
     st = avformat_new_stream(mxf->fc, NULL);
@@ -4433,8 +4433,8 @@ static const AVOption options[] = {
     { "eia608_extract", "extract eia 608 captions from s436m track",
       offsetof(MXFContext, eia608_extract), AV_OPT_TYPE_BOOL, {.i64 = 0}, 0, 1,
       AV_OPT_FLAG_DECODING_PARAM },
-    { "phdr_metadata_extract", "extract Prototype High Dynamic range (eg. Dolby Vision) metadata",
-      offsetof(MXFContext, phdr_metadata_extract), AV_OPT_TYPE_BOOL, {.i64 = 0}, 0, 1,
+    { "dovi_metadata_extract", "extract Dolby Vision (eg. Prototype HDR) metadata",
+      offsetof(MXFContext, dovi_metadata_extract), AV_OPT_TYPE_BOOL, {.i64 = 0}, 0, 1,
       AV_OPT_FLAG_DECODING_PARAM },
     { NULL },
 };
