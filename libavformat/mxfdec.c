@@ -379,7 +379,6 @@ static const uint8_t mxf_mastering_display_uls[4][16] = {
 };
 
 static const uint8_t mxf_phdr_image_metadata_wrapping_frame[]   = { 0x06,0x0e,0x2b,0x34,0x04,0x01,0x01,0x05,0x0e,0x09,0x06,0x07,0x01,0x01,0x01,0x01 };
-static const uint8_t mxf_phdr_image_metadata_item[]             = { 0x06,0x0e,0x2b,0x34,0x01,0x02,0x01,0x05,0x0e,0x09,0x06,0x07,0x01,0x01,0x01,0x00 };
 static const uint8_t mxf_phdr_data_definition[]                 = { 0x06,0x0e,0x2b,0x34,0x01,0x01,0x01,0x05,0x0e,0x09,0x06,0x07,0x01,0x01,0x01,0x04 };
 static const uint8_t mxf_phdr_source_track_id[]                 = { 0x06,0x0e,0x2b,0x34,0x01,0x01,0x01,0x05,0x0e,0x09,0x06,0x07,0x01,0x01,0x01,0x05 };
 static const uint8_t mxf_phdr_simple_payload_sid[]              = { 0x06,0x0e,0x2b,0x34,0x01,0x01,0x01,0x05,0x0e,0x09,0x06,0x07,0x01,0x01,0x01,0x06 };
@@ -1063,6 +1062,9 @@ static int mxf_read_source_clip(void *arg, AVIOContext *pb, int tag, int size, U
 {
     MXFStructuralComponent *source_clip = arg;
     switch(tag) {
+    case 0x0201:
+        avio_read(pb, source_clip->data_definition_ul, 16);
+        break;
     case 0x0202:
         source_clip->duration = avio_rb64(pb);
         break;
@@ -1143,7 +1145,7 @@ static int mxf_read_sequence(void *arg, AVIOContext *pb, int tag, int size, UID 
     case 0x0201:
         avio_read(pb, sequence->data_definition_ul, 16);
         break;
-        case 0x4b02:
+    case 0x4b02:
         sequence->origin = avio_r8(pb);
         break;
     case 0x1001:
@@ -2507,18 +2509,14 @@ static int mxf_add_phdr_metadata_stream(MXFContext* mxf)
 
     for (size_t j = 0; j < track->sequence->structural_components_count; j++) {
         component = mxf_resolve_sourceclip(mxf, &track->sequence->structural_components_refs[j]);
-        if (component) {
+        if (component && mxf_match_uid(component->data_definition_ul, mxf_phdr_image_metadata_wrapping_frame,
+                                       sizeof(mxf_phdr_image_metadata_wrapping_frame))) {
             break;
         }
     }
     if (!component) {
-        av_log(mxf->fc, AV_LOG_ERROR, "could not resolve source clip\n");
-        return AVERROR_INVALIDDATA;
-    }
-    if (!mxf_match_uid(component->data_definition_ul, mxf_phdr_image_metadata_wrapping_frame,
-                       sizeof(mxf_phdr_image_metadata_wrapping_frame))) {
         av_log(mxf->fc, AV_LOG_ERROR,
-            "track sequence source clip component data definitions was not PHDR image metadata wrapping frame\n");
+                "source clip component data definitions did not contain PHDR image metadata wrapping frame\n");
         return AVERROR_INVALIDDATA;
     }
 
@@ -2526,7 +2524,6 @@ static int mxf_add_phdr_metadata_stream(MXFContext* mxf)
         av_log(mxf->fc, AV_LOG_TRACE, "no PHDR global metadata found in metadata sets\n");
         return AVERROR_INVALIDDATA;
     }
-    av_dict_set(&st->metadata, "dovi_global_metadata", mxf->phdr_global_metadata->data, 0 /* flags */);
 
     // Create a data stream which can be consumed by a client to obtain per-frame metadata
     st = avformat_new_stream(mxf->fc, NULL);
@@ -2535,6 +2532,7 @@ static int mxf_add_phdr_metadata_stream(MXFContext* mxf)
         return AVERROR(ENOMEM);
     }
 
+    av_dict_set(&st->metadata, "dovi_global_metadata", mxf->phdr_global_metadata->data, 0 /* flags */);
     st->codecpar->codec_type = AVMEDIA_TYPE_DATA;
     st->codecpar->codec_id = AV_CODEC_ID_BIN_DATA;
     st->id = track->track_id;
@@ -4434,7 +4432,7 @@ static const AVOption options[] = {
       offsetof(MXFContext, eia608_extract), AV_OPT_TYPE_BOOL, {.i64 = 0}, 0, 1,
       AV_OPT_FLAG_DECODING_PARAM },
     { "dovi_metadata_extract", "extract Dolby Vision (eg. Prototype HDR) metadata",
-      offsetof(MXFContext, dovi_metadata_extract), AV_OPT_TYPE_BOOL, {.i64 = 0}, 0, 1,
+      offsetof(MXFContext, phdr_metadata_extract), AV_OPT_TYPE_BOOL, {.i64 = 0}, 0, 1,
       AV_OPT_FLAG_DECODING_PARAM },
     { NULL },
 };
