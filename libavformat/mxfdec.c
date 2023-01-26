@@ -4431,7 +4431,7 @@ static const AVOption options[] = {
     { "eia608_extract", "extract eia 608 captions from s436m track",
       offsetof(MXFContext, eia608_extract), AV_OPT_TYPE_BOOL, {.i64 = 0}, 0, 1,
       AV_OPT_FLAG_DECODING_PARAM },
-    { "dovi_metadata_extract", "extract Dolby Vision (eg. Prototype HDR) metadata",
+    { "dovi_metadata_extract", "extract Dolby Vision (ie. Prototype HDR) metadata",
       offsetof(MXFContext, phdr_metadata_extract), AV_OPT_TYPE_BOOL, {.i64 = 0}, 0, 1,
       AV_OPT_FLAG_DECODING_PARAM },
     { NULL },
