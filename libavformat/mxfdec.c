@@ -2521,6 +2521,7 @@ static int mxf_init_phdr_metadata_components(MXFContext* mxf)
     }
 
     mxf->valid_phdr_metadata_present = 1;
+    av_dict_set_int(&st->metadata, "dovi_frame_metadata", 1, 0 /* flags */);
 
     // The presence of global metadata is optional
     if (mxf->phdr_global_metadata && mxf->phdr_global_metadata->data) {
