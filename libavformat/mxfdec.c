@@ -323,7 +323,8 @@ typedef struct MXFContext {
     MXFIndexTable *index_tables;
     int eia608_extract;
     int phdr_metadata_extract; /**< Boolean flag to enable extraction of metadata */
-    int phdr_metadata_stream_index; /**< Non-negative integer when a metadata stream (per-frame data) is detected */
+    //int phdr_metadata_stream_index; /**< Non-negative integer when a metadata stream (per-frame data) is detected */
+    int valid_phdr_metadata_present; /**< Boolean flag to indicate metadata stream (per-frame data) is present and valid */
     MXFPHDRGlobalMetadata *phdr_global_metadata; /**< Pointer to cached global metadata */
 } MXFContext;
 
@@ -2484,7 +2485,7 @@ static MXFTrack* mxf_get_phdr_metadata_track(MXFContext* mxf)
     return phdr_metadata_track;
 }
 
-static int mxf_add_phdr_metadata_stream(MXFContext* mxf)
+static int mxf_init_phdr_metadata_components(MXFContext* mxf)
 {
     MXFTrack* track = NULL;
     MXFStructuralComponent *component = NULL;
@@ -2501,9 +2502,11 @@ static int mxf_add_phdr_metadata_stream(MXFContext* mxf)
         return AVERROR_INVALIDDATA;
     }
     if (!mxf_match_uid(track->sequence->data_definition_ul, mxf_phdr_image_metadata_item,
-                       sizeof(mxf_phdr_image_metadata_item))) {
+                       sizeof(mxf_phdr_image_metadata_item)) &&
+        !mxf_match_uid(track->sequence->data_definition_ul, mxf_phdr_image_metadata_wrapping_frame,
+                       sizeof(mxf_phdr_image_metadata_wrapping_frame))) {
         av_log(mxf->fc, AV_LOG_ERROR,
-            "track sequence component data definitions was not PHDR image metadata item\n");
+            "track sequence component data definitions was not a PHDR image metadata item\n");
         return AVERROR_INVALIDDATA;
     }
 
@@ -2520,6 +2523,10 @@ static int mxf_add_phdr_metadata_stream(MXFContext* mxf)
         return AVERROR_INVALIDDATA;
     }
 
+    mxf->valid_phdr_metadata_present = 1;
+    av_dict_set(&mxf->fc->metadata, "dovi_global_metadata", mxf->phdr_global_metadata->data, 0 /* flags */);
+
+#if 0
     if (!mxf->phdr_global_metadata) {
         av_log(mxf->fc, AV_LOG_TRACE, "no PHDR global metadata found in metadata sets\n");
         return AVERROR_INVALIDDATA;
@@ -2561,6 +2568,7 @@ static int mxf_add_phdr_metadata_stream(MXFContext* mxf)
 
     // Cache stream index to make per-packet processing easier later on
     mxf->phdr_metadata_stream_index = st->index;
+#endif
     return 0;
 }
 
@@ -3946,7 +3954,7 @@ static int mxf_read_header(AVFormatContext *s)
         return ret;
 
     if (mxf->phdr_metadata_extract) {
-        mxf_add_phdr_metadata_stream(mxf);
+        mxf_init_phdr_metadata_components(mxf);
     }
 
     for (int i = 0; i < s->nb_streams; i++)
@@ -4157,7 +4165,7 @@ static int mxf_read_packet(AVFormatContext *s, AVPacket *pkt)
             IS_KLV_KEY(klv.key, mxf_avid_essence_element_key) ||
             (is_phdr = mxf_match_uid(klv.key, mxf_phdr_image_metadata_item, sizeof(mxf_phdr_image_metadata_item-1)))) {
             int body_sid = find_body_sid_by_absolute_offset(mxf, klv.offset);
-            int index = is_phdr ? mxf->phdr_metadata_stream_index : mxf_get_stream_index(s, &klv, body_sid);
+            int index = is_phdr ? mxf->valid_phdr_metadata_present : mxf_get_stream_index(s, &klv, body_sid);
             int64_t next_ofs;
             AVStream *st;
             MXFTrack *track;
