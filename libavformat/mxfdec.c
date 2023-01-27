@@ -323,7 +323,6 @@ typedef struct MXFContext {
     MXFIndexTable *index_tables;
     int eia608_extract;
     int phdr_metadata_extract; /**< Boolean flag to enable extraction of metadata */
-    //int phdr_metadata_stream_index; /**< Non-negative integer when a metadata stream (per-frame data) is detected */
     int valid_phdr_metadata_present; /**< Boolean flag to indicate metadata stream (per-frame data) is present and valid */
     MXFPHDRGlobalMetadata *phdr_global_metadata; /**< Pointer to cached global metadata */
 } MXFContext;
@@ -2489,8 +2488,6 @@ static int mxf_init_phdr_metadata_components(MXFContext* mxf)
 {
     MXFTrack* track = NULL;
     MXFStructuralComponent *component = NULL;
-    const MXFCodecUL *container_ul = NULL;
-    AVStream *st = NULL;
 
     if (!(track = mxf_get_phdr_metadata_track(mxf))) {
         return 0;
@@ -2524,51 +2521,19 @@ static int mxf_init_phdr_metadata_components(MXFContext* mxf)
     }
 
     mxf->valid_phdr_metadata_present = 1;
-    av_dict_set(&mxf->fc->metadata, "dovi_global_metadata", mxf->phdr_global_metadata->data, 0 /* flags */);
 
-#if 0
-    if (!mxf->phdr_global_metadata) {
-        av_log(mxf->fc, AV_LOG_TRACE, "no PHDR global metadata found in metadata sets\n");
-        return AVERROR_INVALIDDATA;
+    // The presence of global metadata is optional
+    if (mxf->phdr_global_metadata && mxf->phdr_global_metadata->data) {
+        for (size_t i; i < mxf->fc->nb_streams; ++i) {
+            AVStream* st = mxf->fc->streams[i];
+            if (st->codecpar->codec_type == AVMEDIA_TYPE_VIDEO) {
+                // Propagate global metadata to each stream, as it could be singularily wrapped
+                // by a higher level demuxer (eg. IMF)
+                av_dict_set(&st->metadata, "dovi_global_metadata", mxf->phdr_global_metadata->data, 0 /* flags */);
+            }
+        }
     }
 
-    // Create a data stream which can be consumed by a client to obtain per-frame metadata
-    st = avformat_new_stream(mxf->fc, NULL);
-    if (!st) {
-        av_log(mxf->fc, AV_LOG_ERROR, "could not allocate PHDR metadata stream\n");
-        return AVERROR(ENOMEM);
-    }
-
-    av_dict_set(&st->metadata, "dovi_global_metadata", mxf->phdr_global_metadata->data, 0 /* flags */);
-    st->codecpar->codec_type = AVMEDIA_TYPE_DATA;
-    st->codecpar->codec_id = AV_CODEC_ID_BIN_DATA;
-    st->id = track->track_id;
-
-    if (track->name && track->name[0]) {
-        av_dict_set(&st->metadata, "track_name", track->name, 0);
-    }
-    container_ul = mxf_get_codec_ul(mxf_data_essence_container_uls, &track->sequence->data_definition_ul);
-    if (container_ul->desc) {
-        av_dict_set(&st->metadata, "data_type", container_ul->desc, 0);
-    }
-
-    av_log(mxf->fc, AV_LOG_TRACE, "added in use PHDR metadata track id %u\n", track->track_id);
-    if (track->edit_rate.num <= 0 ||
-        track->edit_rate.den <= 0) {
-        av_log(mxf->fc, AV_LOG_WARNING,
-                "Invalid edit rate (%d/%d) found on stream #%d, "
-                "defaulting to 25/1\n",
-                track->edit_rate.num,
-                track->edit_rate.den, st->index);
-        track->edit_rate = (AVRational){25, 1};
-    }
-    avpriv_set_pts_info(st, 64, track->edit_rate.den, track->edit_rate.num);
-
-    st->priv_data = track;
-
-    // Cache stream index to make per-packet processing easier later on
-    mxf->phdr_metadata_stream_index = st->index;
-#endif
     return 0;
 }
 
@@ -4137,7 +4102,6 @@ static int mxf_read_packet(AVFormatContext *s, AVPacket *pkt)
     while (1) {
         int64_t max_data_size;
         int64_t pos = avio_tell(s->pb);
-        int64_t is_phdr = 0;
 
         if (pos < mxf->current_klv_data.next_klv - mxf->current_klv_data.length || pos >= mxf->current_klv_data.next_klv) {
             mxf->current_klv_data = (KLVPacket){{0}};
@@ -4162,17 +4126,14 @@ static int mxf_read_packet(AVFormatContext *s, AVPacket *pkt)
         }
         if (IS_KLV_KEY(klv.key, mxf_essence_element_key) ||
             IS_KLV_KEY(klv.key, mxf_canopus_essence_element_key) ||
-            IS_KLV_KEY(klv.key, mxf_avid_essence_element_key) ||
-            (is_phdr = mxf_match_uid(klv.key, mxf_phdr_image_metadata_item, sizeof(mxf_phdr_image_metadata_item-1)))) {
+            IS_KLV_KEY(klv.key, mxf_avid_essence_element_key)) {
             int body_sid = find_body_sid_by_absolute_offset(mxf, klv.offset);
-            int index = is_phdr ? mxf->valid_phdr_metadata_present : mxf_get_stream_index(s, &klv, body_sid);
+            int index = mxf_get_stream_index(s, &klv, body_sid);
+
             int64_t next_ofs;
             AVStream *st;
             MXFTrack *track;
 
-            if (is_phdr && !mxf->phdr_metadata_extract) {
-                goto skip;
-            }
             if (index < 0) {
                 av_log(s, AV_LOG_ERROR,
                        "error getting stream index %"PRIu32"\n",
@@ -4231,7 +4192,46 @@ static int mxf_read_packet(AVFormatContext *s, AVPacket *pkt)
                     mxf->current_klv_data = (KLVPacket){{0}};
                     return ret;
                 }
-            } else {
+            } else if (mxf->phdr_metadata_extract && mxf->valid_phdr_metadata_present &&
+                       s->streams[index]->codecpar->codec_id == AV_CODEC_ID_JPEG2000) {
+                AVDictionary* side_data_dict = NULL;
+                char* data = NULL;
+                size_t packed_dict_size = 0;
+                KLVPacket nextKlv;
+
+                av_log(s, AV_LOG_DEBUG, "found J2K frame with PHDR metadata\n");
+
+                // Extract the J2K frame
+                ret = av_get_packet(s->pb, pkt, klv.length);
+                if (ret < 0) {
+                    mxf->current_klv_data = (KLVPacket){{0}};
+                    return ret;
+                }
+
+                // Next immediate KLV is supposed to be a PHDR element
+                avio_seek(s->pb, klv.next_klv, SEEK_SET);
+                ret = klv_read_packet(&nextKlv, s->pb);
+                if (ret < 0) {
+                    mxf->current_klv_data = (KLVPacket){{0}};
+                    return ret;
+                }
+                mxf->current_klv_data = nextKlv;
+                max_data_size = nextKlv.length;
+                if (!mxf_match_uid(nextKlv.key, mxf_phdr_image_metadata_item, sizeof(mxf_phdr_image_metadata_item-1))) {
+                    av_log(s, AV_LOG_WARNING, "found J2K frame, but no PHDR metadata followed\n");
+                    return AVERROR_INVALIDDATA;
+                }
+
+                // Add the accompanying metadata to the packet, with null termination
+                data = av_mallocz(nextKlv.length + 1);
+                avio_read(s->pb, data, nextKlv.length);
+                av_dict_set(&side_data_dict, "dovi_metadata", data, AV_DICT_DONT_STRDUP_VAL);
+
+                uint8_t* packed_dict = av_packet_pack_dictionary(side_data_dict, &packed_dict_size);
+                av_dict_free(&side_data_dict);
+                av_packet_add_side_data(pkt, AV_PKT_DATA_STRINGS_METADATA, packed_dict, packed_dict_size);
+            }
+             else {
                 ret = av_get_packet(s->pb, pkt, klv.length);
                 if (ret < 0) {
                     mxf->current_klv_data = (KLVPacket){{0}};
@@ -4440,7 +4440,7 @@ static const AVOption options[] = {
       offsetof(MXFContext, eia608_extract), AV_OPT_TYPE_BOOL, {.i64 = 0}, 0, 1,
       AV_OPT_FLAG_DECODING_PARAM },
     { "dovi_metadata_extract", "extract Dolby Vision (ie. Prototype HDR) metadata",
-      offsetof(MXFContext, phdr_metadata_extract), AV_OPT_TYPE_BOOL, {.i64 = 0}, 0, 1,
+      offsetof(MXFContext, phdr_metadata_extract), AV_OPT_TYPE_BOOL, {.i64 = 1}, 0, 1,
       AV_OPT_FLAG_DECODING_PARAM },
     { NULL },
 };
