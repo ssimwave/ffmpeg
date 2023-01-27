@@ -2521,17 +2521,17 @@ static int mxf_init_phdr_metadata_components(MXFContext* mxf)
     }
 
     mxf->valid_phdr_metadata_present = 1;
-    av_dict_set_int(&st->metadata, "dovi_frame_metadata", 1, 0 /* flags */);
 
     // The presence of global metadata is optional
-    if (mxf->phdr_global_metadata && mxf->phdr_global_metadata->data) {
-        for (size_t i; i < mxf->fc->nb_streams; ++i) {
-            AVStream* st = mxf->fc->streams[i];
-            if (st->codecpar->codec_type == AVMEDIA_TYPE_VIDEO) {
+    for (size_t i; i < mxf->fc->nb_streams; ++i) {
+        AVStream* st = mxf->fc->streams[i];
+        if (st->codecpar->codec_type == AVMEDIA_TYPE_VIDEO) {
+            if (mxf->phdr_global_metadata && mxf->phdr_global_metadata->data) {
                 // Propagate global metadata to each stream, as it could be singularily wrapped
                 // by a higher level demuxer (eg. IMF)
                 av_dict_set(&st->metadata, "dovi_global_metadata", mxf->phdr_global_metadata->data, 0 /* flags */);
             }
+            av_dict_set_int(&st->metadata, "dovi_frame_metadata_present", 1, 0 /* flags */);
         }
     }
 
@@ -4226,7 +4226,7 @@ static int mxf_read_packet(AVFormatContext *s, AVPacket *pkt)
                 // Add the accompanying metadata to the packet, with null termination
                 data = av_mallocz(nextKlv.length + 1);
                 avio_read(s->pb, data, nextKlv.length);
-                av_dict_set(&side_data_dict, "dovi_metadata", data, AV_DICT_DONT_STRDUP_VAL);
+                av_dict_set(&side_data_dict, "dovi_frame_metadata", data, AV_DICT_DONT_STRDUP_VAL);
 
                 uint8_t* packed_dict = av_packet_pack_dictionary(side_data_dict, &packed_dict_size);
                 av_dict_free(&side_data_dict);
