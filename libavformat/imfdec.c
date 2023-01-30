@@ -652,17 +652,6 @@ static int imf_read_header(AVFormatContext *s)
     if ((ret = ffio_copy_url_options(s->pb, &c->avio_opts)) < 0)
         return ret;
 
-    if (av_opt_get(s->pb, "dovi_metadata_extract", AV_OPT_SEARCH_CHILDREN, &dovi_opt) >= 0) {
-        if (dovi_opt[0] != '\0') {
-            ret = av_dict_set(&c->avio_opts, "dovi_metadata_extract", dovi_opt, AV_DICT_DONT_STRDUP_VAL);
-            if (ret < 0) {
-                return ret;
-            } else {
-                av_freep(&dovi_opt);
-            }
-        }
-    }
-
     av_log(s, AV_LOG_DEBUG, "start parsing IMF CPL: %s\n", s->url);
 
     if ((ret = ff_imf_parse_cpl(s->pb, &c->cpl)) < 0)
