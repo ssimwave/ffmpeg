@@ -121,6 +121,7 @@ typedef struct IMFContext {
     char *asset_map_paths;
     AVIOInterruptCB *interrupt_callback;
     AVDictionary *avio_opts;
+    AVDictionary *mxf_format_options;
     FFIMFCPL *cpl;
     IMFAssetLocatorMap asset_locator_map;
     uint32_t track_count;
@@ -387,6 +388,9 @@ static int open_track_resource_context(AVFormatContext *s,
     if ((ret = av_dict_copy(&opts, c->avio_opts, 0)) < 0)
         goto cleanup;
 
+    if ((ret = av_dict_copy(&opts, c->mxf_format_options, 0)) < 0)
+        goto cleanup;
+
     ret = avformat_open_input(&track_resource->ctx,
                               track_resource->locator->absolute_uri,
                               NULL,
@@ -633,6 +637,7 @@ static int imf_read_header(AVFormatContext *s)
     IMFContext *c = s->priv_data;
     char *asset_map_path;
     char *tmp_str;
+    uint8_t *dovi_opt;
     int ret = 0;
 
     c->interrupt_callback = &s->interrupt_callback;
@@ -646,6 +651,17 @@ static int imf_read_header(AVFormatContext *s)
 
     if ((ret = ffio_copy_url_options(s->pb, &c->avio_opts)) < 0)
         return ret;
+
+    if (av_opt_get(s->pb, "dovi_metadata_extract", AV_OPT_SEARCH_CHILDREN, &dovi_opt) >= 0) {
+        if (dovi_opt[0] != '\0') {
+            ret = av_dict_set(&c->avio_opts, "dovi_metadata_extract", dovi_opt, AV_DICT_DONT_STRDUP_VAL);
+            if (ret < 0) {
+                return ret;
+            } else {
+                av_freep(&dovi_opt);
+            }
+        }
+    }
 
     av_log(s, AV_LOG_DEBUG, "start parsing IMF CPL: %s\n", s->url);
 
@@ -990,6 +1006,14 @@ static const AVOption imf_options[] = {
         .type        = AV_OPT_TYPE_STRING,
         .default_val = {.str = NULL},
         .flags       = AV_OPT_FLAG_DECODING_PARAM,
+    },
+    {
+        .name        = "mxf_format_options",
+        .help        = "Set options for internal MXF demuxer",
+        .offset      = offsetof(IMFContext, mxf_format_options),
+        .type        = AV_OPT_TYPE_DICT,
+        .default_val = {.str = NULL},
+        .flags      = AV_OPT_FLAG_DECODING_PARAM,
     },
     {NULL},
 };
