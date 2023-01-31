@@ -4193,53 +4193,14 @@ static int mxf_read_packet(AVFormatContext *s, AVPacket *pkt)
                     mxf->current_klv_data = (KLVPacket){{0}};
                     return ret;
                 }
-            } else if (mxf->phdr_metadata_extract && mxf->valid_phdr_metadata_present &&
-                       s->streams[index]->codecpar->codec_id == AV_CODEC_ID_JPEG2000) {
-                AVDictionary* side_data_dict = NULL;
-                char* data = NULL;
-                uint8_t* packed_dict = NULL;
-                size_t packed_dict_size = 0;
-                KLVPacket nextKlv;
-
-                av_log(s, AV_LOG_DEBUG, "found J2K frame with PHDR metadata\n");
-
-                // Extract the J2K frame
-                ret = av_get_packet(s->pb, pkt, klv.length);
-                if (ret < 0) {
-                    mxf->current_klv_data = (KLVPacket){{0}};
-                    return ret;
-                }
-
-                // Next immediate KLV is supposed to be a PHDR element
-                avio_seek(s->pb, klv.next_klv, SEEK_SET);
-                ret = klv_read_packet(&nextKlv, s->pb);
-                if (ret < 0) {
-                    mxf->current_klv_data = (KLVPacket){{0}};
-                    return ret;
-                }
-                mxf->current_klv_data = nextKlv;
-                max_data_size = nextKlv.length;
-                if (!mxf_match_uid(nextKlv.key, mxf_phdr_image_metadata_item, sizeof(mxf_phdr_image_metadata_item)-1)) {
-                    av_log(s, AV_LOG_WARNING, "found J2K frame, but no PHDR metadata followed\n");
-                    return AVERROR_INVALIDDATA;
-                }
-
-                // Add the accompanying metadata to the packet, with null termination
-                data = av_mallocz(nextKlv.length + 1);
-                avio_read(s->pb, data, nextKlv.length);
-                av_dict_set(&side_data_dict, "dovi_frame_metadata", data, AV_DICT_DONT_STRDUP_VAL);
-
-                packed_dict = av_packet_pack_dictionary(side_data_dict, &packed_dict_size);
-                av_dict_free(&side_data_dict);
-                av_packet_add_side_data(pkt, AV_PKT_DATA_STRINGS_METADATA, packed_dict, packed_dict_size);
-            }
-             else {
+            } else {
                 ret = av_get_packet(s->pb, pkt, klv.length);
                 if (ret < 0) {
                     mxf->current_klv_data = (KLVPacket){{0}};
                     return ret;
                 }
             }
+
             pkt->stream_index = index;
             pkt->pos = klv.offset;
 
@@ -4251,6 +4212,45 @@ static int mxf_read_packet(AVFormatContext *s, AVPacket *pkt)
 
             /* seek for truncated packets */
             avio_seek(s->pb, klv.next_klv, SEEK_SET);
+
+            if (mxf->phdr_metadata_extract && mxf->valid_phdr_metadata_present &&
+                s->streams[index]->codecpar->codec_id == AV_CODEC_ID_JPEG2000) {
+                AVDictionary* side_data_dict = NULL;
+                char* data = NULL;
+                uint8_t* packed_dict = NULL;
+                size_t packed_dict_size = 0;
+                KLVPacket nextKlv;
+
+                av_log(s, AV_LOG_DEBUG, "found J2K frame, expecting PHDR metadata\n");
+
+                // Next immediate KLV is supposed to be a PHDR element
+                avio_seek(s->pb, klv.next_klv, SEEK_SET);
+                ret = klv_read_packet(&nextKlv, s->pb);
+                if (ret < 0) {
+                    mxf->current_klv_data = (KLVPacket){{0}};
+                    return ret;
+                }
+                mxf->current_klv_data = nextKlv;
+                max_data_size = nextKlv.length;
+                if (mxf_match_uid(nextKlv.key, mxf_phdr_image_metadata_item, sizeof(mxf_phdr_image_metadata_item)-1)) {
+                    // Add the accompanying metadata to the packet, with null termination
+                    data = av_mallocz(nextKlv.length + 1);
+                    avio_read(s->pb, data, nextKlv.length);
+                    av_dict_set(&side_data_dict, "dovi_frame_metadata", data, AV_DICT_DONT_STRDUP_VAL);
+
+                    packed_dict = av_packet_pack_dictionary(side_data_dict, &packed_dict_size);
+                    av_dict_free(&side_data_dict);
+                    av_packet_add_side_data(pkt, AV_PKT_DATA_STRINGS_METADATA, packed_dict, packed_dict_size);
+                    /* seek for truncated packets */
+                    avio_seek(s->pb, nextKlv.next_klv, SEEK_SET);
+                } else {
+                    // Leave next KLV for further processing next time around
+                    av_log(s, AV_LOG_WARNING, "found J2K frame, but no PHDR metadata followed\n");
+                }
+            } else {
+                /* seek for truncated packets */
+                avio_seek(s->pb, klv.next_klv, SEEK_SET);
+            }
 
             return 0;
         } else {
