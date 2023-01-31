@@ -637,7 +637,6 @@ static int imf_read_header(AVFormatContext *s)
     IMFContext *c = s->priv_data;
     char *asset_map_path;
     char *tmp_str;
-    uint8_t *dovi_opt;
     int ret = 0;
 
     c->interrupt_callback = &s->interrupt_callback;
