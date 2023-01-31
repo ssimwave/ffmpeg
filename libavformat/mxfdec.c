@@ -4219,7 +4219,7 @@ static int mxf_read_packet(AVFormatContext *s, AVPacket *pkt)
                 }
                 mxf->current_klv_data = nextKlv;
                 max_data_size = nextKlv.length;
-                if (!mxf_match_uid(nextKlv.key, mxf_phdr_image_metadata_item, sizeof(mxf_phdr_image_metadata_item-1))) {
+                if (!mxf_match_uid(nextKlv.key, mxf_phdr_image_metadata_item, sizeof(mxf_phdr_image_metadata_item)-1)) {
                     av_log(s, AV_LOG_WARNING, "found J2K frame, but no PHDR metadata followed\n");
                     return AVERROR_INVALIDDATA;
                 }
