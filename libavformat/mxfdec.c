@@ -4197,6 +4197,7 @@ static int mxf_read_packet(AVFormatContext *s, AVPacket *pkt)
                        s->streams[index]->codecpar->codec_id == AV_CODEC_ID_JPEG2000) {
                 AVDictionary* side_data_dict = NULL;
                 char* data = NULL;
+                uint8_t* packed_dict = NULL;
                 size_t packed_dict_size = 0;
                 KLVPacket nextKlv;
 
@@ -4228,7 +4229,7 @@ static int mxf_read_packet(AVFormatContext *s, AVPacket *pkt)
                 avio_read(s->pb, data, nextKlv.length);
                 av_dict_set(&side_data_dict, "dovi_frame_metadata", data, AV_DICT_DONT_STRDUP_VAL);
 
-                uint8_t* packed_dict = av_packet_pack_dictionary(side_data_dict, &packed_dict_size);
+                packed_dict = av_packet_pack_dictionary(side_data_dict, &packed_dict_size);
                 av_dict_free(&side_data_dict);
                 av_packet_add_side_data(pkt, AV_PKT_DATA_STRINGS_METADATA, packed_dict, packed_dict_size);
             }
