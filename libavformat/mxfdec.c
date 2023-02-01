@@ -4210,7 +4210,7 @@ static int mxf_read_packet(AVFormatContext *s, AVPacket *pkt)
                 return ret;
             }
 
-            /* seek for truncated packets */
+            /* seek for truncated packets, effectively seeks to the next KLV */
             avio_seek(s->pb, klv.next_klv, SEEK_SET);
 
             if (mxf->phdr_metadata_extract && mxf->valid_phdr_metadata_present &&
@@ -4224,7 +4224,6 @@ static int mxf_read_packet(AVFormatContext *s, AVPacket *pkt)
                 av_log(s, AV_LOG_DEBUG, "found J2K frame, expecting PHDR metadata\n");
 
                 // Next immediate KLV is supposed to be a PHDR element
-                avio_seek(s->pb, klv.next_klv, SEEK_SET);
                 ret = klv_read_packet(&nextKlv, s->pb);
                 if (ret < 0) {
                     mxf->current_klv_data = (KLVPacket){{0}};
@@ -4247,11 +4246,7 @@ static int mxf_read_packet(AVFormatContext *s, AVPacket *pkt)
                     // Leave next KLV for further processing next time around
                     av_log(s, AV_LOG_WARNING, "found J2K frame, but no PHDR metadata followed\n");
                 }
-            } else {
-                /* seek for truncated packets */
-                avio_seek(s->pb, klv.next_klv, SEEK_SET);
             }
-
             return 0;
         } else {
         skip:
