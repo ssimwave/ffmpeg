@@ -917,7 +917,7 @@ static int parse_playlist(HLSContext *c, const char *url,
             if (c->sample_aes_iv && (strcmp(c->sample_aes_iv, "") != 0)) {
                 ff_hex_to_data(iv, c->sample_aes_iv);
                 has_iv = 1;
-                av_log(c->ctx, 0, "Overwrote IV with input 0x%x\n", *iv);
+                av_log(c->ctx, 0, "Overwrote IV with input 0x%x\n", (char *)iv);
             }
 
             if (c->sample_aes_cek_location && (strcmp(c->sample_aes_cek_location, "") != 0)) {
