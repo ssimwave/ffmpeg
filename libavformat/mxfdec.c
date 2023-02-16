@@ -29,6 +29,8 @@
  * SMPTE 382M Mapping AES3 and Broadcast Wave Audio into the MXF Generic Container
  * SMPTE 383M Mapping DV-DIF Data to the MXF Generic Container
  * SMPTE 2067-21 Interoperable Master Format — Application #2E
+ * SMPTE 410 Generic Stream Partition
+ * SMPTE RDD 56 Track File for JPEG 2000 Codestreams with Time-Synchronous Metadata
  *
  * Principle
  * Search for Track numbers which will identify essence element KLV packets.
@@ -378,6 +380,7 @@ static const uint8_t mxf_mastering_display_uls[4][16] = {
     FF_MXF_MasteringDisplayMinimumLuminance,
 };
 
+// Refer to SMPTE RDD 56:2021 (https://ieeexplore.ieee.org/document/9521134)
 static const uint8_t mxf_phdr_image_metadata_wrapping_frame[]   = { 0x06,0x0e,0x2b,0x34,0x04,0x01,0x01,0x05,0x0e,0x09,0x06,0x07,0x01,0x01,0x01,0x01 };
 static const uint8_t mxf_phdr_data_definition[]                 = { 0x06,0x0e,0x2b,0x34,0x01,0x01,0x01,0x05,0x0e,0x09,0x06,0x07,0x01,0x01,0x01,0x04 };
 static const uint8_t mxf_phdr_source_track_id[]                 = { 0x06,0x0e,0x2b,0x34,0x01,0x01,0x01,0x05,0x0e,0x09,0x06,0x07,0x01,0x01,0x01,0x05 };
