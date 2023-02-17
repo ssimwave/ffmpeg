@@ -29,6 +29,8 @@
  * SMPTE 382M Mapping AES3 and Broadcast Wave Audio into the MXF Generic Container
  * SMPTE 383M Mapping DV-DIF Data to the MXF Generic Container
  * SMPTE 2067-21 Interoperable Master Format — Application #2E
+ * SMPTE 410 Generic Stream Partition
+ * SMPTE RDD 56 Track File for JPEG 2000 Codestreams with Time-Synchronous Metadata
  *
  * Principle
  * Search for Track numbers which will identify essence element KLV packets.
@@ -378,12 +380,13 @@ static const uint8_t mxf_mastering_display_uls[4][16] = {
     FF_MXF_MasteringDisplayMinimumLuminance,
 };
 
+// Refer to SMPTE RDD 56:2021 (https://ieeexplore.ieee.org/document/9521134)
 static const uint8_t mxf_phdr_image_metadata_wrapping_frame[]   = { 0x06,0x0e,0x2b,0x34,0x04,0x01,0x01,0x05,0x0e,0x09,0x06,0x07,0x01,0x01,0x01,0x01 };
 static const uint8_t mxf_phdr_data_definition[]                 = { 0x06,0x0e,0x2b,0x34,0x01,0x01,0x01,0x05,0x0e,0x09,0x06,0x07,0x01,0x01,0x01,0x04 };
 static const uint8_t mxf_phdr_source_track_id[]                 = { 0x06,0x0e,0x2b,0x34,0x01,0x01,0x01,0x05,0x0e,0x09,0x06,0x07,0x01,0x01,0x01,0x05 };
 static const uint8_t mxf_phdr_simple_payload_sid[]              = { 0x06,0x0e,0x2b,0x34,0x01,0x01,0x01,0x05,0x0e,0x09,0x06,0x07,0x01,0x01,0x01,0x06 };
 
-// When considered as an essence item, UL byte (15) should be ignored when comparing against the normative key.
+// When considered as an essence item, UL byte (15) can contain dynamic track/stream IDs, so ignore it
 static const uint8_t mxf_phdr_image_metadata_item[]             = { 0x06,0x0e,0x2b,0x34,0x01,0x02,0x01,0x05,0x0e,0x09,0x06,0x07,0x01,0x01,0x01,0x00 };
 
 #define IS_KLV_KEY(x, y) (!memcmp(x, y, sizeof(y)))
@@ -1628,7 +1631,7 @@ static const MXFCodecUL mxf_data_essence_container_uls[] = {
     { { 0x06,0x0e,0x2b,0x34,0x04,0x01,0x01,0x09,0x0d,0x01,0x03,0x01,0x02,0x0d,0x00,0x00 }, 16, AV_CODEC_ID_NONE,      "vbi_smpte_436M", 11 },
     { { 0x06,0x0e,0x2b,0x34,0x04,0x01,0x01,0x09,0x0d,0x01,0x03,0x01,0x02,0x0e,0x00,0x00 }, 16, AV_CODEC_ID_NONE, "vbi_vanc_smpte_436M", 11 },
     { { 0x06,0x0e,0x2b,0x34,0x04,0x01,0x01,0x09,0x0d,0x01,0x03,0x01,0x02,0x13,0x01,0x01 }, 16, AV_CODEC_ID_TTML },
-    { { 0x06,0x0e,0x2b,0x34,0x01,0x02,0x01,0x05,0x0e,0x09,0x06,0x07,0x01,0x01,0x01,0x00 }, 16, AV_CODEC_ID_FFMETADATA, "dovi_metadata"},
+    { { 0x06,0x0e,0x2b,0x34,0x01,0x02,0x01,0x05,0x0e,0x09,0x06,0x07,0x01,0x01,0x01,0x00 }, 16, AV_CODEC_ID_FFMETADATA, "phdr_metadata"},
     { { 0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00 },  0, AV_CODEC_ID_NONE },
 };
 
@@ -2471,7 +2474,7 @@ static MXFTrack* mxf_get_phdr_metadata_track(MXFContext* mxf)
         return NULL;
     }
 
-    // Obtain the actual MXF track containing presumed Dolby Vision metadata, based on mapped track ID
+    // Obtain the actual MXF track containing presumed PHDR based on mapped track ID
     for (size_t k = 0; k < mxf->metadata_sets_count; k++) {
         MXFMetadataSet *metadata = mxf->metadata_sets[k];
         if (metadata->type == Track && (track_id == ((MXFTrack*)(metadata))->track_id)) {
@@ -2529,9 +2532,9 @@ static int mxf_init_phdr_metadata_components(MXFContext* mxf)
             if (mxf->phdr_global_metadata && mxf->phdr_global_metadata->data) {
                 // Propagate global metadata to each stream, as it could be singularily wrapped
                 // by a higher level demuxer (eg. IMF)
-                av_dict_set(&st->metadata, "dovi_global_metadata", mxf->phdr_global_metadata->data, 0 /* flags */);
+                av_dict_set(&st->metadata, "phdr_global_metadata", mxf->phdr_global_metadata->data, 0 /* flags */);
             }
-            av_dict_set_int(&st->metadata, "dovi_frame_metadata_present", 1, 0 /* flags */);
+            av_dict_set_int(&st->metadata, "phdr_image_metadata_present", 1, 0 /* flags */);
         }
     }
 
@@ -4235,7 +4238,7 @@ static int mxf_read_packet(AVFormatContext *s, AVPacket *pkt)
                     // Add the accompanying metadata to the packet, with null termination
                     data = av_mallocz(nextKlv.length + 1);
                     avio_read(s->pb, data, nextKlv.length);
-                    av_dict_set(&side_data_dict, "dovi_frame_metadata", data, AV_DICT_DONT_STRDUP_VAL);
+                    av_dict_set(&side_data_dict, "phdr_image_metadata", data, AV_DICT_DONT_STRDUP_VAL);
 
                     packed_dict = av_packet_pack_dictionary(side_data_dict, &packed_dict_size);
                     av_dict_free(&side_data_dict);
@@ -4436,7 +4439,7 @@ static const AVOption options[] = {
     { "eia608_extract", "extract eia 608 captions from s436m track",
       offsetof(MXFContext, eia608_extract), AV_OPT_TYPE_BOOL, {.i64 = 0}, 0, 1,
       AV_OPT_FLAG_DECODING_PARAM },
-    { "dovi_metadata_extract", "extract Dolby Vision (ie. Prototype HDR) metadata",
+    { "phdr_metadata_extract", "extract Prototype HDR metadata",
       offsetof(MXFContext, phdr_metadata_extract), AV_OPT_TYPE_BOOL, {.i64 = 0}, 0, 1,
       AV_OPT_FLAG_DECODING_PARAM },
     { NULL },
