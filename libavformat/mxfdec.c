@@ -3948,7 +3948,8 @@ static int mxf_read_header(AVFormatContext *s)
             /* we're still parsing forward. proceed to parsing this partition pack */
         }
 
-        if (mxf_is_generic_stream_data_element_key(klv.key)) {
+        if (mxf->phdr_metadata_extract && mxf_is_generic_stream_data_element_key(klv.key)) {
+            /* limit parsing of generic stream data to the PHDR use case, until widespread usage is confirmed */
             if ((ret = mxf_parse_generic_stream_data_element(mxf, klv)) < 0) {
                 return ret;
             }
