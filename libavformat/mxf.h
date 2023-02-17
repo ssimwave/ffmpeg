@@ -53,9 +53,7 @@ enum MXFMetadataSetType {
     AudioChannelLabelSubDescriptor,
     SoundfieldGroupLabelSubDescriptor,
     GroupOfSoundfieldGroupsLabelSubDescriptor,
-    GenericStreamData,
     PHDRMetadataTrackSubDescriptor,
-    /*PHDRGlobalData,*/ // TODO TOM
 };
 
 enum MXFFrameLayout {
@@ -135,6 +133,7 @@ int ff_mxf_get_content_package_rate(AVRational time_base);
     (x)[8],  (x)[9],  (x)[10], (x)[11],     \
     (x)[12], (x)[13], (x)[14], (x)[15]      \
 
+#define DEBUG
 #ifdef DEBUG
 #define PRINT_KEY(pc, s, x)                         \
     av_log(pc, AV_LOG_VERBOSE,                      \
