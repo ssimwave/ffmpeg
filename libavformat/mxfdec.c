@@ -4340,6 +4340,9 @@ static int mxf_read_close(AVFormatContext *s)
     av_freep(&mxf->local_tags);
 
     if (mxf->generic_stream_data) {
+        for (i = 0; i < mxf->generic_stream_data_count; ++i) {
+            av_freep(&generic_stream_data->data);
+        }
         av_freep(&mxf->generic_stream_data);
     }
 
