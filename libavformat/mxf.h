@@ -54,7 +54,6 @@ enum MXFMetadataSetType {
     SoundfieldGroupLabelSubDescriptor,
     GroupOfSoundfieldGroupsLabelSubDescriptor,
     PHDRMetadataTrackSubDescriptor,
-    PHDRGlobalData,
 };
 
 enum MXFFrameLayout {

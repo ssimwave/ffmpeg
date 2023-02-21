@@ -29,8 +29,8 @@
  * SMPTE 382M Mapping AES3 and Broadcast Wave Audio into the MXF Generic Container
  * SMPTE 383M Mapping DV-DIF Data to the MXF Generic Container
  * SMPTE 2067-21 Interoperable Master Format — Application #2E
- * SMPTE 410 Generic Stream Partition
  * SMPTE RDD 56 Track File for JPEG 2000 Codestreams with Time-Synchronous Metadata
+ * SMPTE 410 Generic Stream Partition
  *
  * Principle
  * Search for Track numbers which will identify essence element KLV packets.
@@ -280,11 +280,11 @@ typedef struct MXFPHDRMetadataTrackSubDescriptor {
     uint32_t simple_payload_id;
 } MXFPHDRMetadataTrackSubDescriptor;
 
-typedef struct MXFPHDRGlobalMetadata {
-    MXFMetadataSet meta;
+typedef struct MXFGenericStreamData {
+    int64_t offset;
     size_t length;
     char* data;
-} MXFPHDRGlobalMetadata;
+} MXFGenericStreamData;
 
 /* decoded index table */
 typedef struct MXFIndexTable {
@@ -326,7 +326,8 @@ typedef struct MXFContext {
     int eia608_extract;
     int phdr_metadata_extract; /**< Boolean flag to enable extraction of metadata */
     int valid_phdr_metadata_present; /**< Boolean flag to indicate metadata stream (per-frame data) is present and valid */
-    MXFPHDRGlobalMetadata *phdr_global_metadata; /**< Pointer to cached global metadata */
+    MXFGenericStreamData *generic_stream_data;
+    unsigned generic_stream_data_count;
 } MXFContext;
 
 /* NOTE: klv_offset is not set (-1) for local keys */
@@ -348,6 +349,7 @@ static const uint8_t mxf_system_item_key_cp[]              = { 0x06,0x0e,0x2b,0x
 static const uint8_t mxf_system_item_key_gc[]              = { 0x06,0x0e,0x2b,0x34,0x02,0x53,0x01,0x01,0x0d,0x01,0x03,0x01,0x14 };
 static const uint8_t mxf_klv_key[]                         = { 0x06,0x0e,0x2b,0x34 };
 static const uint8_t mxf_apple_coll_prefix[]               = { 0x06,0x0e,0x2b,0x34,0x01,0x01,0x01,0x0e,0x0e,0x20,0x04,0x01,0x05,0x03,0x01 };
+static const uint8_t mxf_generic_stream_data_element_key[] = { 0x06,0x0e,0x2b,0x34,0x01,0x01,0x01,0x0c,0x0d,0x01,0x05 };
 
 /* complete keys to match */
 static const uint8_t mxf_crypto_source_container_ul[]      = { 0x06,0x0e,0x2b,0x34,0x01,0x01,0x01,0x09,0x06,0x01,0x01,0x02,0x02,0x00,0x00,0x00 };
@@ -2455,44 +2457,56 @@ static int mxf_add_metadata_stream(MXFContext *mxf, MXFTrack *track)
     return 0;
 }
 
-static MXFTrack* mxf_get_phdr_metadata_track(MXFContext* mxf)
+static MXFTrack* mxf_get_phdr_metadata_track(MXFContext* mxf, MXFPHDRMetadataTrackSubDescriptor* track_subdescriptor)
 {
     MXFTrack* phdr_metadata_track = NULL;
-    int64_t track_id = -1;
 
-    // Obtain PHDR Metadata track information
-    for (size_t k = 0; k < mxf->metadata_sets_count; k++) {
-        MXFMetadataSet *metadata = mxf->metadata_sets[k];
-        if (metadata->type == PHDRMetadataTrackSubDescriptor) {
-            track_id = ((MXFPHDRMetadataTrackSubDescriptor*)metadata)->source_track_id;
-            break;
-        }
-    }
-
-    if (-1 == track_id) {
-        // No interleaved PHDR metadata exists
+    if (!track_subdescriptor) {
         return NULL;
     }
 
     // Obtain the actual MXF track containing presumed PHDR based on mapped track ID
     for (size_t k = 0; k < mxf->metadata_sets_count; k++) {
         MXFMetadataSet *metadata = mxf->metadata_sets[k];
-        if (metadata->type == Track && (track_id == ((MXFTrack*)(metadata))->track_id)) {
+        if (metadata->type == Track && (track_subdescriptor->source_track_id == ((MXFTrack*)(metadata))->track_id)) {
             phdr_metadata_track = (MXFTrack*)metadata;
             break;
         }
     }
 
-    av_log(mxf->fc, AV_LOG_TRACE, "found in use PHDR metadata source track id %" PRIu64 "\n", track_id);
+    av_log(mxf->fc, AV_LOG_TRACE, "found in use PHDR metadata source track id %d\n",
+        track_subdescriptor->source_track_id);
+
     return phdr_metadata_track;
+}
+
+static MXFPHDRMetadataTrackSubDescriptor* mxf_get_phdr_metadata_track_subdescriptor(MXFContext* mxf)
+{
+    // Obtain PHDR Metadata track information
+    for (size_t k = 0; k < mxf->metadata_sets_count; k++) {
+        MXFMetadataSet *metadata = mxf->metadata_sets[k];
+        if (metadata->type == PHDRMetadataTrackSubDescriptor) {
+            return ((MXFPHDRMetadataTrackSubDescriptor*)metadata);
+        }
+    }
+
+    // No interleaved PHDR metadata exists
+    return NULL;
 }
 
 static int mxf_init_phdr_metadata_components(MXFContext* mxf)
 {
     MXFTrack* track = NULL;
+    MXFPHDRMetadataTrackSubDescriptor* track_subdescriptor = NULL;
     MXFStructuralComponent *component = NULL;
+    MXFGenericStreamData* global_metadata = NULL;
+    int body_sid = 0;
 
-    if (!(track = mxf_get_phdr_metadata_track(mxf))) {
+    if (!(track_subdescriptor = mxf_get_phdr_metadata_track_subdescriptor(mxf))) {
+        return 0;
+    }
+
+    if (!(track = mxf_get_phdr_metadata_track(mxf, track_subdescriptor))) {
         return 0;
     }
 
@@ -2525,14 +2539,22 @@ static int mxf_init_phdr_metadata_components(MXFContext* mxf)
 
     mxf->valid_phdr_metadata_present = 1;
 
-    // The presence of global metadata is optional
-    for (size_t i; i < mxf->fc->nb_streams; ++i) {
+    // Attach any global metadata found
+    for (size_t i = 0; i < mxf->generic_stream_data_count; ++i) {
+        body_sid = find_body_sid_by_absolute_offset(mxf, mxf->generic_stream_data[i].offset);
+        if ((body_sid == track_subdescriptor->simple_payload_id) && mxf->generic_stream_data[i].data) {
+            global_metadata = &mxf->generic_stream_data[i];
+            break;
+        }
+    }
+
+    for (size_t i = 0; i < mxf->fc->nb_streams; ++i) {
         AVStream* st = mxf->fc->streams[i];
         if (st->codecpar->codec_type == AVMEDIA_TYPE_VIDEO) {
-            if (mxf->phdr_global_metadata && mxf->phdr_global_metadata->data) {
+            if (global_metadata) {
                 // Propagate global metadata to each stream, as it could be singularily wrapped
                 // by a higher level demuxer (eg. IMF)
-                av_dict_set(&st->metadata, "phdr_global_metadata", mxf->phdr_global_metadata->data, 0 /* flags */);
+                av_dict_set(&st->metadata, "phdr_global_metadata", global_metadata->data, 0 /* flags */);
             }
             av_dict_set_int(&st->metadata, "phdr_image_metadata_present", 1, 0 /* flags */);
         }
@@ -3294,40 +3316,6 @@ static int mxf_read_phdr_metadata_track_sub_descriptor(void *arg, AVIOContext *p
     return 0;
 }
 
-static int mxf_read_phdr_global_metadata(void *arg, AVIOContext *pb, int tag, int size, UID uid, int64_t klv_offset)
-{
-    MXFContext *mxf = arg;
-    int read_res = 0;
-
-    mxf->phdr_global_metadata = av_mallocz(sizeof(*mxf->phdr_global_metadata));
-    if (!mxf->phdr_global_metadata) {
-        return AVERROR(ENOMEM);
-    }
-
-    // Global metadata is not null terminated, we must do it ourselves to treat as a string when stored in a dictionary
-    mxf->phdr_global_metadata->data = av_mallocz(size + 1);
-    if (!mxf->phdr_global_metadata->data) {
-        av_freep(&mxf->phdr_global_metadata);
-        return AVERROR(ENOMEM);
-    }
-
-    mxf->phdr_global_metadata->length = size;
-
-    read_res = avio_read(pb, mxf->phdr_global_metadata->data, size);
-    mxf->phdr_global_metadata->data[size] = '\0';
-
-    if (read_res >= 0) {
-        av_log(mxf->fc, AV_LOG_TRACE, "PHDR global data: read %d bytes\n", read_res);
-        av_log(mxf->fc, AV_LOG_TRACE, "PHDR global data body: %s", mxf->phdr_global_metadata->data);
-    }
-    else {
-        av_log(mxf->fc, AV_LOG_TRACE, "Failed to read PHDR global data: result %d\n", read_res);
-        av_freep(&mxf->phdr_global_metadata->data);
-        av_freep(&mxf->phdr_global_metadata);
-    }
-    return read_res;
-}
-
 static const MXFMetadataReadTableEntry mxf_metadata_read_table[] = {
     { { 0x06,0x0e,0x2b,0x34,0x02,0x05,0x01,0x01,0x0d,0x01,0x02,0x01,0x01,0x05,0x01,0x00 }, mxf_read_primer_pack },
     { { 0x06,0x0e,0x2b,0x34,0x02,0x05,0x01,0x01,0x0d,0x01,0x02,0x01,0x01,0x02,0x01,0x00 }, mxf_read_partition_pack },
@@ -3372,7 +3360,6 @@ static const MXFMetadataReadTableEntry mxf_metadata_read_table[] = {
     { { 0x06,0x0e,0x2b,0x34,0x02,0x53,0x01,0x01,0x0d,0x01,0x02,0x01,0x01,0x10,0x01,0x00 }, mxf_read_index_table_segment, sizeof(MXFIndexTableSegment), IndexTableSegment },
     { { 0x06,0x0e,0x2b,0x34,0x02,0x53,0x01,0x01,0x0d,0x01,0x01,0x01,0x01,0x01,0x23,0x00 }, mxf_read_essence_container_data, sizeof(MXFEssenceContainerData), EssenceContainerData },
     { { 0x06,0x0e,0x2b,0x34,0x02,0x53,0x01,0x05,0x0e,0x09,0x06,0x07,0x01,0x01,0x01,0x03 }, mxf_read_phdr_metadata_track_sub_descriptor, sizeof(MXFPHDRMetadataTrackSubDescriptor), PHDRMetadataTrackSubDescriptor },
-    { { 0x06,0x0e,0x2b,0x34,0x01,0x01,0x01,0x0c,0x0d,0x01,0x05,0x09,0x01,0x00,0x00,0x00 }, mxf_read_phdr_global_metadata, sizeof(MXFPHDRGlobalMetadata), PHDRGlobalData },
 
     { { 0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00 }, NULL, 0, AnyType },
 };
@@ -3481,6 +3468,17 @@ static int mxf_is_partition_pack_key(UID key)
 }
 
 /**
+ * Matches any generic stream data element key value.
+ * The following elements are ignored and should be parsed elsewhere if required:
+ * - Data signaling (byte 12)
+ * - Wrapping signaling (byte 13)
+*/
+static int mxf_is_generic_stream_data_element_key(UID key)
+{
+    return !memcmp(key, mxf_generic_stream_data_element_key, sizeof(mxf_generic_stream_data_element_key));
+}
+
+/**
  * Parses a metadata KLV
  * @return <0 on error, 0 otherwise
  */
@@ -3508,6 +3506,60 @@ static int mxf_parse_klv(MXFContext *mxf, KLVPacket klv, MXFMetadataReadFunc *re
         av_log(s, AV_LOG_ERROR, "error reading header metadata\n");
         return res;
     }
+    return 0;
+}
+
+static int mxf_parse_generic_stream_data_element(MXFContext *mxf, KLVPacket klv)
+{
+    AVFormatContext *s = mxf->fc;
+    uint64_t next = avio_tell(s->pb) + klv.length;
+    int res = 0;
+
+    MXFGenericStreamData *generic_stream_data, *tmp_generic_stream_data;
+    tmp_generic_stream_data = av_realloc_array(
+        mxf->generic_stream_data, mxf->generic_stream_data_count + 1, sizeof(*mxf->generic_stream_data));
+
+    if (!tmp_generic_stream_data) {
+        return AVERROR(ENOMEM);
+    }
+
+    mxf->generic_stream_data = tmp_generic_stream_data;
+    generic_stream_data = &mxf->generic_stream_data[mxf->generic_stream_data_count];
+    ++mxf->generic_stream_data_count;
+
+    memset(generic_stream_data, 0, sizeof(*generic_stream_data));
+
+    generic_stream_data->offset = klv.offset;
+
+    // Text based generic stream may not be null terminated, we must do it ourselves to treat as a string when stored
+    // in a dictionary
+    generic_stream_data->data = av_mallocz(klv.length + 1);
+    if (!mxf->generic_stream_data->data) {
+        return AVERROR(ENOMEM);
+    }
+
+    generic_stream_data->length = klv.length;
+
+    res = avio_read(s->pb, generic_stream_data->data, klv.length);
+    generic_stream_data->data[generic_stream_data->length] = '\0';
+
+    if (res >= 0) {
+        av_log(mxf->fc, AV_LOG_TRACE, "generic stream data: read %d bytes\n", res);
+        av_log(mxf->fc, AV_LOG_TRACE, "generic stream data: %s", generic_stream_data->data);
+    }
+    else {
+        av_log(mxf->fc, AV_LOG_TRACE, "failed to read Generic stream data: result %d\n", res);
+        av_freep(&generic_stream_data->data);
+    }
+
+    /* only seek forward, else this can loop for a long time */
+    if (avio_tell(s->pb) > next) {
+        av_log(s, AV_LOG_ERROR, "read past end of KLV @ %#"PRIx64"\n",
+                klv.offset);
+        return AVERROR_INVALIDDATA;
+    }
+
+    avio_seek(s->pb, next, SEEK_SET);
     return 0;
 }
 
@@ -3897,17 +3949,25 @@ static int mxf_read_header(AVFormatContext *s)
             /* we're still parsing forward. proceed to parsing this partition pack */
         }
 
-        for (metadata = mxf_metadata_read_table; metadata->read; metadata++) {
-            if (IS_KLV_KEY(klv.key, metadata->key)) {
-                if ((ret = mxf_parse_klv(mxf, klv, metadata->read, metadata->ctx_size, metadata->type)) < 0)
-                    return ret;
-                break;
+        if (mxf->phdr_metadata_extract && mxf_is_generic_stream_data_element_key(klv.key)) {
+            /* limit parsing of generic stream data to the PHDR use case, until widespread usage is confirmed */
+            if ((ret = mxf_parse_generic_stream_data_element(mxf, klv)) < 0) {
+                return ret;
             }
         }
-        if (!metadata->read) {
-            av_log(s, AV_LOG_VERBOSE, "Dark key " PRIxUID "\n",
-                            UID_ARG(klv.key));
-            avio_skip(s->pb, klv.length);
+        else {
+            for (metadata = mxf_metadata_read_table; metadata->read; metadata++) {
+                if (IS_KLV_KEY(klv.key, metadata->key)) {
+                    if ((ret = mxf_parse_klv(mxf, klv, metadata->read, metadata->ctx_size, metadata->type)) < 0)
+                        return ret;
+                    break;
+                }
+            }
+            if (!metadata->read) {
+                av_log(s, AV_LOG_VERBOSE, "Dark key " PRIxUID "\n",
+                                UID_ARG(klv.key));
+                avio_skip(s->pb, klv.length);
+            }
         }
     }
     /* FIXME avoid seek */
@@ -4280,9 +4340,11 @@ static int mxf_read_close(AVFormatContext *s)
     av_freep(&mxf->aesc);
     av_freep(&mxf->local_tags);
 
-    if (mxf->phdr_global_metadata) {
-        av_freep(&mxf->phdr_global_metadata->data);
-        av_freep(&mxf->phdr_global_metadata);
+    if (mxf->generic_stream_data) {
+        for (i = 0; i < mxf->generic_stream_data_count; ++i) {
+            av_freep(&mxf->generic_stream_data[i].data);
+        }
+        av_freep(&mxf->generic_stream_data);
     }
 
     if (mxf->index_tables) {
