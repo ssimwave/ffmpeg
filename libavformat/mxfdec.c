@@ -2544,6 +2544,7 @@ static int mxf_init_phdr_metadata_components(MXFContext* mxf)
         body_sid = find_body_sid_by_absolute_offset(mxf, mxf->generic_stream_data[i].offset);
         if ((body_sid == track_subdescriptor->simple_payload_id) && mxf->generic_stream_data[i].data) {
             global_metadata = &mxf->generic_stream_data[i];
+            break;
         }
     }
 
