@@ -137,6 +137,7 @@ typedef struct EBUR128Context {
     int target;                     ///< target level in LUFS used to set relative zero LU in visualization
     int gauge_type;                 ///< whether gauge shows momentary or short
     int scale;                      ///< display scale type of statistics
+    int gate_measurement;           ///< whether or not to use the gated measurement
 } EBUR128Context;
 
 enum {
@@ -167,6 +168,7 @@ static const AVOption ebur128_options[] = {
         { "info",    "information logging level", 0, AV_OPT_TYPE_CONST, {.i64 = AV_LOG_INFO},    INT_MIN, INT_MAX, A|V|F, "level" },
         { "verbose", "verbose logging level",     0, AV_OPT_TYPE_CONST, {.i64 = AV_LOG_VERBOSE}, INT_MIN, INT_MAX, A|V|F, "level" },
     { "metadata", "inject metadata in the filtergraph", OFFSET(metadata), AV_OPT_TYPE_BOOL, {.i64 = 0}, 0, 1, A|V|F },
+    { "gate", "use the gated loudness measurement", OFFSET(gate_measurement), AV_OPT_TYPE_BOOL, {.i64 = 1}, 0, 1, A|F },
     { "peak", "set peak mode", OFFSET(peak_mode), AV_OPT_TYPE_FLAGS, {.i64 = PEAK_MODE_NONE}, 0, INT_MAX, A|F, "mode" },
         { "none",   "disable any peak mode",   0, AV_OPT_TYPE_CONST, {.i64 = PEAK_MODE_NONE},          INT_MIN, INT_MAX, A|F, "mode" },
         { "sample", "enable peak-sample mode", 0, AV_OPT_TYPE_CONST, {.i64 = PEAK_MODE_SAMPLES_PEAKS}, INT_MIN, INT_MAX, A|F, "mode" },
@@ -727,7 +729,7 @@ static int filter_frame(AVFilterLink *inlink, AVFrame *insamples)
             /* Integrated loudness */
 #define I_GATE_THRES -10  // initially defined to -8 LU in the first EBU standard
 
-            if (loudness_400 >= ABS_THRES) {
+            if (ebur128->gate_measurement && loudness_400 >= ABS_THRES) {
                 double integrated_sum = 0.0;
                 uint64_t nb_integrated = 0;
                 int gate_hist_pos = gate_update(&ebur128->i400, power_400,
@@ -746,6 +748,15 @@ static int filter_frame(AVFilterLink *inlink, AVFrame *insamples)
                     if (nb_channels == 1 && ebur128->dual_mono) {
                         ebur128->integrated_loudness -= ebur128->pan_law;
                     }
+                }
+            }
+            else if (!ebur128->gate_measurement) {
+                ebur128->i400.sum_kept_powers += power_400;
+                ebur128->i400.nb_kept_powers++;
+                ebur128->integrated_loudness = LOUDNESS(ebur128->i400.sum_kept_powers / ebur128->i400.nb_kept_powers);
+                /* dual-mono correction */
+                if (nb_channels == 1 && ebur128->dual_mono) {
+                    ebur128->integrated_loudness -= ebur128->pan_law;
                 }
             }
 
