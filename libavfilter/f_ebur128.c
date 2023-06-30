@@ -48,6 +48,8 @@
 #define HIST_GRAIN   100            ///< defines histogram precision
 #define HIST_SIZE  ((ABS_UP_THRES - ABS_THRES) * HIST_GRAIN + 1)
 
+#define ALMOST_ZERO 0.000001
+
 /**
  * A histogram is an array of HIST_SIZE hist_entry storing all the energies
  * recorded (with an accuracy of 1/HIST_GRAIN) of the loudnesses from ABS_THRES
@@ -73,16 +75,34 @@ struct integrator {
     struct hist_entry *histogram;   ///< histogram of the powers, used to compute LRA and I
 };
 
+typedef struct interp_filter {
+  unsigned int count;  /* Number of coefficients in this subfilter */
+  unsigned int* index; /* Delay index of corresponding filter coeff */
+  double* coeff;       /* List of subfilter coefficients */
+}interp_filter;
+
+typedef struct interpolator {         /* Data structure for polyphase FIR interpolator */
+  unsigned int factor;   /* Interpolation factor of the interpolator */
+  unsigned int taps;     /* Taps (prefer odd to increase zero coeffs) */
+  unsigned int channels; /* Number of channels */
+  unsigned int delay;    /* Size of delay buffer */
+  interp_filter* filter; /* List of subfilters (one for each factor) */
+  float** z;             /* List of delay buffers (one for each channel) */
+  unsigned int zi;       /* Current delay buffer index */
+} interpolator;
+
 struct rect { int x, y, w, h; };
 
 typedef struct EBUR128Context {
     const AVClass *class;           ///< AVClass context for log and options purpose
 
     /* peak metering */
+    interpolator *interp;           ///< low-pass FIR interpolator
     int peak_mode;                  ///< enabled peak modes
     double *true_peaks;             ///< true peaks per channel
     double *sample_peaks;           ///< sample peaks per channel
     double *true_peaks_per_frame;   ///< true peaks in a frame per channel
+    double *true_peaks_per_frame_lp;///< low-passed true peaks in a frame per channel
 #if CONFIG_SWRESAMPLE
     SwrContext *swr_ctx;            ///< over-sampling context for true peak metering
     double *swr_buf;                ///< resampled audio data for true peak metering
@@ -487,14 +507,71 @@ static int config_audio_output(AVFilterLink *outlink)
 #if CONFIG_SWRESAMPLE
     if (ebur128->peak_mode & PEAK_MODE_TRUE_PEAKS) {
         int ret;
+        unsigned int j;
 
         ebur128->swr_buf    = av_malloc_array(nb_channels, 19200 * sizeof(double));
         ebur128->true_peaks = av_calloc(nb_channels, sizeof(*ebur128->true_peaks));
         ebur128->true_peaks_per_frame = av_calloc(nb_channels, sizeof(*ebur128->true_peaks_per_frame));
+        ebur128->true_peaks_per_frame_lp = av_calloc(nb_channels, sizeof(*ebur128->true_peaks_per_frame_lp));
         ebur128->swr_ctx    = swr_alloc();
+        ebur128->interp     = av_calloc(1, sizeof(interpolator));
         if (!ebur128->swr_buf || !ebur128->true_peaks ||
-            !ebur128->true_peaks_per_frame || !ebur128->swr_ctx)
+            !ebur128->interp || !ebur128->true_peaks_per_frame || !ebur128->swr_ctx)
             return AVERROR(ENOMEM);
+
+        if (outlink->sample_rate < 96000) {
+            ebur128->interp->factor = 4;
+        }
+        else if (outlink->sample_rate < 192000) {
+            ebur128->interp->factor = 2;
+        }
+        else {
+            ebur128->interp->factor = 1;
+        }
+
+        ebur128->interp->taps   = 49;
+        ebur128->interp->channels = nb_channels;
+        ebur128->interp->delay = (ebur128->interp->taps + ebur128->interp->factor - 1) / ebur128->interp->factor;
+        av_log(ctx, AV_LOG_INFO, "ITU BS.1770-3 FIR Info\n");
+        av_log(ctx, AV_LOG_INFO, "Factor: %d\n", ebur128->interp->factor);
+        av_log(ctx, AV_LOG_INFO, "Taps: %d\n", ebur128->interp->taps);
+        av_log(ctx, AV_LOG_INFO, "Delay: %d\n", ebur128->interp->delay);
+
+        ebur128->interp->filter = av_calloc(ebur128->interp->factor,
+                                            sizeof(*ebur128->interp->filter));
+
+        for (j = 0; j < ebur128->interp->factor; j++) {
+            ebur128->interp->filter[j].index =
+                av_calloc(ebur128->interp->delay, sizeof(unsigned int));
+            ebur128->interp->filter[j].coeff =
+                av_calloc(ebur128->interp->delay, sizeof(double));
+        }
+
+        ebur128->interp->z = av_calloc(ebur128->interp->channels, sizeof(float*));
+        for (j = 0; j < ebur128->interp->channels; j++) {
+            ebur128->interp->z[j] = av_calloc(ebur128->interp->delay, sizeof(float));
+        }
+
+        /* Calculate the filter coefficients */
+        for (j = 0; j < ebur128->interp->taps; j++) {
+            /* Calculate sinc */
+            double m = (double) j - (double) (ebur128->interp->taps - 1) / 2.0;
+            double c = 1.0;
+            if (fabs(m) > ALMOST_ZERO) {
+              c = sin(m * M_PI / ebur128->interp->factor) / (m * M_PI / ebur128->interp->factor);
+            }
+            /* Apply Hanning window */
+            c *= 0.5 * (1 - cos(2 * M_PI * j / (ebur128->interp->taps - 1)));
+
+            if (fabs(c) > ALMOST_ZERO) { /* Ignore any zero coeffs. */
+              /* Put the coefficient into the correct subfilter */
+              unsigned int f = j % ebur128->interp->factor;
+              unsigned int t = ebur128->interp->filter[f].count++;
+
+              ebur128->interp->filter[f].coeff[t] = c;
+              ebur128->interp->filter[f].index[t] = j / ebur128->interp->factor;
+            }
+        }
 
         av_opt_set_chlayout(ebur128->swr_ctx, "in_chlayout",   &outlink->ch_layout, 0);
         av_opt_set_int(ebur128->swr_ctx, "in_sample_rate",       outlink->sample_rate, 0);
@@ -637,16 +714,47 @@ static int filter_frame(AVFilterLink *inlink, AVFrame *insamples)
         const double *swr_samples = ebur128->swr_buf;
         int ret = swr_convert(ebur128->swr_ctx, (uint8_t**)&ebur128->swr_buf, 19200,
                               (const uint8_t **)insamples->data, nb_samples);
+        double acc = 0;
+        double c = 0;
+        unsigned int f = 0;
+        unsigned int t = 0;
         if (ret < 0)
             return ret;
-        for (ch = 0; ch < nb_channels; ch++)
+        for (ch = 0; ch < nb_channels; ch++) {
             ebur128->true_peaks_per_frame[ch] = 0.0;
+            ebur128->true_peaks_per_frame_lp[ch] = 0.0;
+        }
         for (idx_insample = 0; idx_insample < ret; idx_insample++) {
             for (ch = 0; ch < nb_channels; ch++) {
+                //av_log(ctx, AV_LOG_INFO, "Channel %d Sample %d FIR %0.16f SWR %0.16f\n",
+                //        ch, idx_insample, acc, *swr_samples);
+
+                // Add sample to delay buffer
+                ebur128->interp->z[ch][ebur128->interp->zi] = *swr_samples;
+                // Apply coefficients
+                for (f = 0; f < ebur128->interp->factor; f++) {
+                    acc = 0.0;
+                    for (t = 0; t < ebur128->interp->filter[f].count; t++) {
+                        int i = (int)ebur128->interp->zi - (int)ebur128->interp->filter[f].index[t];
+                        if (i < 0) {
+                            i += (int)ebur128->interp->delay;
+                        }
+                        c = ebur128->interp->filter[f].coeff[t];
+                        acc += (double)ebur128->interp->z[ch][i]*c;
+                    }
+                    ebur128->true_peaks_per_frame_lp[ch] = FFMAX(ebur128->true_peaks_per_frame_lp[ch],
+                                                              fabs(acc));
+
+                }
+
                 ebur128->true_peaks[ch] = FFMAX(ebur128->true_peaks[ch], fabs(*swr_samples));
                 ebur128->true_peaks_per_frame[ch] = FFMAX(ebur128->true_peaks_per_frame[ch],
                                                           fabs(*swr_samples));
                 swr_samples++;
+            }
+            ebur128->interp->zi++;
+            if (ebur128->interp->zi == ebur128->interp->delay) {
+              ebur128->interp->zi = 0;
             }
         }
     }
@@ -930,6 +1038,9 @@ static int filter_frame(AVFilterLink *inlink, AVFrame *insamples)
                          snprintf(key, sizeof(key),
                                   META_PREFIX AV_STRINGIFY(TRUE) "_peaks_per_frame_ch%d", ch);
                          SET_META(key, ebur128->true_peaks_per_frame[ch]);
+                         snprintf(key, sizeof(key),
+                                  META_PREFIX AV_STRINGIFY(TRUE) "_peaks_per_frame_lp_ch%d", ch);
+                         SET_META(key, ebur128->true_peaks_per_frame_lp[ch]);
                     }
                 }
             }
