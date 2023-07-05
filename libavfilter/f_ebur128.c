@@ -715,11 +715,9 @@ static int filter_frame(AVFilterLink *inlink, AVFrame *insamples)
                 no_gate_loudness_power += ebur128->ch_weighting[ch] * ebur128->ch_raw_integrated_power[ch];
             }
 
-            if (LOUDNESS(no_gate_loudness_power) >= ABS_THRES) {
-                ebur128->raw_integrated_power_sum += no_gate_loudness_power;
-                ebur128->raw_power_count += 1;
-                ebur128->integrated_loudness = LOUDNESS(ebur128->raw_integrated_power_sum / ebur128->raw_power_count);
-            }
+            ebur128->raw_integrated_power_sum += no_gate_loudness_power;
+            ebur128->raw_power_count += 1;
+            ebur128->integrated_loudness = LOUDNESS(ebur128->raw_integrated_power_sum / ebur128->raw_power_count);
         }
 
         /* For integrated loudness, gating blocks are 400ms long with 75%
