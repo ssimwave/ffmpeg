@@ -128,6 +128,9 @@ typedef struct EBUR128Context {
     double integrated_loudness;     ///< integrated loudness in LUFS (I)
     double loudness_range;          ///< loudness range in LU (LRA)
     double lra_low, lra_high;       ///< low and high LRA values
+    double *ch_ungated_filtered_sample; ///< the unfiltered (BS.1770-1) per channel sample
+    double ungated_sum;                 ///< sum of the product of the ungated samples with channel weights since beginning of measuring
+    long ungated_count;                 ///< Count of number of ungated samples since beginning of measuring
 
     /* misc */
     int loglevel;                   ///< log level for frame logging
@@ -138,9 +141,6 @@ typedef struct EBUR128Context {
     int gauge_type;                 ///< whether gauge shows momentary or short
     int scale;                      ///< display scale type of statistics
     int gate_measurement;           ///< whether or not to use the gated measurement
-    double *ch_raw_integrated_power; ///< each channels's power
-    double raw_integrated_power_sum; ///< total powers since beginning
-    long raw_power_count;            ///< total sample count
 } EBUR128Context;
 
 enum {
@@ -443,11 +443,11 @@ static int config_audio_output(AVFilterLink *outlink)
     ebur128->y            = av_calloc(nb_channels, 3 * sizeof(*ebur128->y));
     ebur128->z            = av_calloc(nb_channels, 3 * sizeof(*ebur128->z));
     ebur128->ch_weighting = av_calloc(nb_channels, sizeof(*ebur128->ch_weighting));
-    ebur128->ch_raw_integrated_power = av_calloc(nb_channels, sizeof(*ebur128->ch_raw_integrated_power));
-    ebur128->raw_integrated_power_sum = 1e-12;
-    ebur128->raw_power_count = 0;
+    ebur128->ch_ungated_filtered_sample = av_calloc(nb_channels, sizeof(*ebur128->ch_ungated_filtered_sample));
+    ebur128->ungated_sum = 1e-12;
+    ebur128->ungated_count = 0;
 
-    if (!ebur128->ch_weighting || !ebur128->x || !ebur128->y || !ebur128->z || !ebur128->ch_raw_integrated_power)
+    if (!ebur128->ch_weighting || !ebur128->x || !ebur128->y || !ebur128->z || !ebur128->ch_ungated_filtered_sample)
         return AVERROR(ENOMEM);
 
 #define I400_BINS(x)  ((x) * 4 / 10)
@@ -706,18 +706,18 @@ static int filter_frame(AVFilterLink *inlink, AVFrame *insamples)
             ebur128->i400.cache [ch][bin_id_400 ] = bin;
             ebur128->i3000.cache[ch][bin_id_3000] = bin;
 
-            ebur128->ch_raw_integrated_power[ch] = bin;
+            ebur128->ch_ungated_filtered_sample[ch] = bin;
         }
 
         if (!ebur128->gate_measurement) {
             double no_gate_loudness_power = 1e-12;
             for (ch = 0; ch < nb_channels; ch++) {
-                no_gate_loudness_power += ebur128->ch_weighting[ch] * ebur128->ch_raw_integrated_power[ch];
+                no_gate_loudness_power += ebur128->ch_weighting[ch] * ebur128->ch_ungated_filtered_sample[ch];
             }
 
-            ebur128->raw_integrated_power_sum += no_gate_loudness_power;
-            ebur128->raw_power_count += 1;
-            ebur128->integrated_loudness = LOUDNESS(ebur128->raw_integrated_power_sum / ebur128->raw_power_count);
+            ebur128->ungated_sum += no_gate_loudness_power;
+            ebur128->ungated_count += 1;
+            ebur128->integrated_loudness = LOUDNESS(ebur128->ungated_sum / ebur128->ungated_count);
         }
 
         /* For integrated loudness, gating blocks are 400ms long with 75%
@@ -1089,7 +1089,7 @@ static av_cold void uninit(AVFilterContext *ctx)
     av_freep(&ebur128->y);
     av_freep(&ebur128->z);
     av_freep(&ebur128->ch_weighting);
-    av_freep(&ebur128->ch_raw_integrated_power);
+    av_freep(&ebur128->ch_ungated_filtered_sample);
     av_freep(&ebur128->true_peaks);
     av_freep(&ebur128->sample_peaks);
     av_freep(&ebur128->true_peaks_per_frame);
