@@ -100,10 +100,8 @@ typedef struct EBUR128Context {
     interpolator *interp;           ///< low-pass FIR interpolator
     int peak_mode;                  ///< enabled peak modes
     double *true_peaks;             ///< true peaks per channel
-    double *true_peaks_lp;             ///< true peaks per channel
     double *sample_peaks;           ///< sample peaks per channel
     double *true_peaks_per_frame;   ///< true peaks in a frame per channel
-    double *true_peaks_per_frame_lp;///< low-passed true peaks in a frame per channel
 #if CONFIG_SWRESAMPLE
     SwrContext *swr_ctx;            ///< over-sampling context for true peak metering
     double *swr_buf;                ///< resampled audio data for true peak metering
@@ -168,6 +166,7 @@ enum {
     PEAK_MODE_NONE          = 0,
     PEAK_MODE_SAMPLES_PEAKS = 1<<1,
     PEAK_MODE_TRUE_PEAKS    = 1<<2,
+    PEAK_MODE_TRUE_PEAKS_FILTERED = 0x8000000 | PEAK_MODE_TRUE_PEAKS,
 };
 
 enum {
@@ -204,6 +203,7 @@ static const AVOption ebur128_options[] = {
         { "none",   "disable any peak mode",   0, AV_OPT_TYPE_CONST, {.i64 = PEAK_MODE_NONE},          INT_MIN, INT_MAX, A|F, "mode" },
         { "sample", "enable peak-sample mode", 0, AV_OPT_TYPE_CONST, {.i64 = PEAK_MODE_SAMPLES_PEAKS}, INT_MIN, INT_MAX, A|F, "mode" },
         { "true",   "enable true-peak mode",   0, AV_OPT_TYPE_CONST, {.i64 = PEAK_MODE_TRUE_PEAKS},    INT_MIN, INT_MAX, A|F, "mode" },
+        { "true-filtered",   "enable true-peak mode filtered for BS.1770-3",   0, AV_OPT_TYPE_CONST, {.i64 = PEAK_MODE_TRUE_PEAKS_FILTERED},    INT_MIN, INT_MAX, A|F, "mode" },
     { "dualmono", "treat mono input files as dual-mono", OFFSET(dual_mono), AV_OPT_TYPE_BOOL, {.i64 = 0}, 0, 1, A|F },
     { "panlaw", "set a specific pan law for dual-mono files", OFFSET(pan_law), AV_OPT_TYPE_DOUBLE, {.dbl = -3.01029995663978}, -10.0, 0.0, A|F },
     { "target", "set a specific target level in LUFS (-23 to 0)", OFFSET(target), AV_OPT_TYPE_INT, {.i64 = -23}, -23, 0, V|F },
@@ -519,9 +519,7 @@ static int config_audio_output(AVFilterLink *outlink)
 
         ebur128->swr_buf    = av_malloc_array(nb_channels, 19200 * sizeof(double));
         ebur128->true_peaks = av_calloc(nb_channels, sizeof(*ebur128->true_peaks));
-        ebur128->true_peaks_lp = av_calloc(nb_channels, sizeof(*ebur128->true_peaks_lp));
         ebur128->true_peaks_per_frame = av_calloc(nb_channels, sizeof(*ebur128->true_peaks_per_frame));
-        ebur128->true_peaks_per_frame_lp = av_calloc(nb_channels, sizeof(*ebur128->true_peaks_per_frame_lp));
         ebur128->swr_ctx    = swr_alloc();
         ebur128->interp     = av_calloc(1, sizeof(interpolator));
         if (!ebur128->swr_buf || !ebur128->true_peaks ||
@@ -561,8 +559,8 @@ static int config_audio_output(AVFilterLink *outlink)
             ebur128->interp->z[j] = av_calloc(ebur128->interp->delay, sizeof(float));
         }
 
-        /* Calculate the filter coefficients */
         #if 0
+        /* Calculate the filter coefficients */
         for (j = 0; j < ebur128->interp->taps; j++) {
             /* Calculate sinc */
             double m = (double) j - (double) (ebur128->interp->taps - 1) / 2.0;
@@ -743,43 +741,47 @@ static int filter_frame(AVFilterLink *inlink, AVFrame *insamples)
             return ret;
         for (ch = 0; ch < nb_channels; ch++) {
             ebur128->true_peaks_per_frame[ch] = 0.0;
-            ebur128->true_peaks_per_frame_lp[ch] = 0.0;
         }
         for (idx_insample = 0; idx_insample < ret; idx_insample++) {
             for (ch = 0; ch < nb_channels; ch++) {
-                //av_log(ctx, AV_LOG_INFO, "Channel %d Sample %d FIR %0.16f SWR %0.16f\n",
-                //        ch, idx_insample, acc, *swr_samples);
+                if (ebur128->peak_mode & PEAK_MODE_TRUE_PEAKS_FILTERED) {
+                    //av_log(ctx, AV_LOG_INFO, "Channel %d Sample %d FIR %0.16f SWR %0.16f\n",
+                    //        ch, idx_insample, acc, *swr_samples);
 
-                // Add sample to delay buffer
-                ebur128->interp->z[ch][ebur128->interp->zi] = *swr_samples;
-                // Apply coefficients
-                for (f = 0; f < ebur128->interp->factor; f++) {
-                    acc = 0.0;
-                    for (t = 0; t < ebur128->interp->filter[f].count; t++) {
-                        int i = (int)ebur128->interp->zi - (int)ebur128->interp->filter[f].index[t];
-                        if (i < 0) {
-                            i += (int)ebur128->interp->delay;
+                    // Add sample to delay buffer
+                    ebur128->interp->z[ch][ebur128->interp->zi] = *swr_samples;
+                    // Apply coefficients
+                    for (f = 0; f < ebur128->interp->factor; f++) {
+                        acc = 0.0;
+                        for (t = 0; t < ebur128->interp->filter[f].count; t++) {
+                            int i = (int)ebur128->interp->zi - (int)ebur128->interp->filter[f].index[t];
+                            if (i < 0) {
+                                i += (int)ebur128->interp->delay;
+                            }
+                            c = ebur128->interp->filter[f].coeff[t];
+                            acc += (double)ebur128->interp->z[ch][i]*c;
+                            //av_log(ctx, ebur128->loglevel, "Factor: %d Count: %d coeff: %0.16f\n", f, t, c);
                         }
-                        c = ebur128->interp->filter[f].coeff[t];
-                        acc += (double)ebur128->interp->z[ch][i]*c;
-                        //av_log(ctx, ebur128->loglevel, "Factor: %d Count: %d coeff: %0.16f\n", f, t, c);
+
+                        //av_log(ctx, ebur128->loglevel, "CH: %d Factor: %d acc: %0.16f\n", ch, f, acc);
+                        ebur128->true_peaks_per_frame[ch] = FFMAX(ebur128->true_peaks_per_frame[ch],
+                                                                  fabs(acc));
+
+                        ebur128->true_peaks[ch] = FFMAX(ebur128->true_peaks[ch], fabs(acc));
                     }
-
-                    //av_log(ctx, ebur128->loglevel, "CH: %d Factor: %d acc: %0.16f\n", ch, f, acc);
-                    ebur128->true_peaks_per_frame_lp[ch] = FFMAX(ebur128->true_peaks_per_frame_lp[ch],
-                                                              fabs(acc));
-
-                    ebur128->true_peaks_lp[ch] = FFMAX(ebur128->true_peaks_lp[ch], fabs(acc));
                 }
-
-                ebur128->true_peaks[ch] = FFMAX(ebur128->true_peaks[ch], fabs(*swr_samples));
-                ebur128->true_peaks_per_frame[ch] = FFMAX(ebur128->true_peaks_per_frame[ch],
-                                                          fabs(*swr_samples));
+                else {
+                    ebur128->true_peaks[ch] = FFMAX(ebur128->true_peaks[ch], fabs(*swr_samples));
+                    ebur128->true_peaks_per_frame[ch] = FFMAX(ebur128->true_peaks_per_frame[ch],
+                                                              fabs(*swr_samples));
+                }
                 swr_samples++;
             }
-            ebur128->interp->zi++;
-            if (ebur128->interp->zi == ebur128->interp->delay) {
-              ebur128->interp->zi = 0;
+            if (ebur128->peak_mode & PEAK_MODE_TRUE_PEAKS_FILTERED) {
+                ebur128->interp->zi++;
+                if (ebur128->interp->zi == ebur128->interp->delay) {
+                  ebur128->interp->zi = 0;
+                }
             }
         }
     }
@@ -1063,9 +1065,6 @@ static int filter_frame(AVFilterLink *inlink, AVFrame *insamples)
                          snprintf(key, sizeof(key),
                                   META_PREFIX AV_STRINGIFY(TRUE) "_peaks_per_frame_ch%d", ch);
                          SET_META(key, ebur128->true_peaks_per_frame[ch]);
-                         snprintf(key, sizeof(key),
-                                  META_PREFIX AV_STRINGIFY(TRUE) "_peaks_per_frame_lp_ch%d", ch);
-                         SET_META(key, ebur128->true_peaks_per_frame_lp[ch]);
                     }
                 }
             }
@@ -1092,8 +1091,8 @@ static int filter_frame(AVFilterLink *inlink, AVFrame *insamples)
 } while (0)
 
             PRINT_PEAKS("SPK", ebur128->sample_peaks, SAMPLES);
-            PRINT_PEAKS("FTPK", ebur128->true_peaks_per_frame_lp, TRUE);
-            PRINT_PEAKS("TPK", ebur128->true_peaks_lp,   TRUE);
+            PRINT_PEAKS("FTPK", ebur128->true_peaks_per_frame, TRUE);
+            PRINT_PEAKS("TPK", ebur128->true_peaks,   TRUE);
             av_log(ctx, ebur128->loglevel, "\n");
 
         }
