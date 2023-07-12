@@ -162,11 +162,12 @@ typedef struct EBUR128Context {
     int gate_measurement;           ///< whether or not to use the gated measurement
 } EBUR128Context;
 
+#define FILTERED 0x80000000
 enum {
     PEAK_MODE_NONE          = 0,
     PEAK_MODE_SAMPLES_PEAKS = 1<<1,
     PEAK_MODE_TRUE_PEAKS    = 1<<2,
-    PEAK_MODE_TRUE_PEAKS_FILTERED = 0x8000000 | PEAK_MODE_TRUE_PEAKS,
+    PEAK_MODE_TRUE_PEAKS_FILTERED = PEAK_MODE_TRUE_PEAKS | FILTERED,
 };
 
 enum {
@@ -177,13 +178,6 @@ enum {
 enum {
     SCALE_TYPE_ABSOLUTE = 0,
     SCALE_TYPE_RELATIVE = 1,
-};
-
-static const double coeffs[4][12] = {
-    { 0.0017089843750, 0.0109863281250, -0.0196533203125, 0.0332031250000, -0.0594482421875, 0.1373291015625, 0.9721679687500, -0.1022949218750, 0.0476074218750, -0.0266113281250, 0.0148925781250, -0.0083007812500 },
-    { -0.0291748046875, 0.0292968750000, -0.0517578125000, 0.0891113281250, -0.1665039062500, 0.4650878906250, 0.7797851562500, -0.2003173828125, 0.1015625000000, -0.0582275390625, 0.0330810546875, -0.0189208984375 },
-    { -0.0189208984375, 0.0330810546875, -0.0582275390625, 0.1015625000000, -0.2003173828125, 0.7797851562500, 0.4650878906250, -0.1665039062500, 0.0891113281250, -0.0517578125000, 0.0292968750000, -0.0291748046875 },
-    { -0.0083007812500, 0.0148925781250, -0.0266113281250, 0.0476074218750, -0.1022949218750, 0.9721679687500, 0.1373291015625, -0.0594482421875, 0.0332031250000, -0.0196533203125, 0.0109863281250, 0.0017089843750 }
 };
 
 #define OFFSET(x) offsetof(EBUR128Context, x)
@@ -203,7 +197,7 @@ static const AVOption ebur128_options[] = {
         { "none",   "disable any peak mode",   0, AV_OPT_TYPE_CONST, {.i64 = PEAK_MODE_NONE},          INT_MIN, INT_MAX, A|F, "mode" },
         { "sample", "enable peak-sample mode", 0, AV_OPT_TYPE_CONST, {.i64 = PEAK_MODE_SAMPLES_PEAKS}, INT_MIN, INT_MAX, A|F, "mode" },
         { "true",   "enable true-peak mode",   0, AV_OPT_TYPE_CONST, {.i64 = PEAK_MODE_TRUE_PEAKS},    INT_MIN, INT_MAX, A|F, "mode" },
-        { "true-filtered",   "enable true-peak mode filtered for BS.1770-3",   0, AV_OPT_TYPE_CONST, {.i64 = PEAK_MODE_TRUE_PEAKS_FILTERED},    INT_MIN, INT_MAX, A|F, "mode" },
+        { "tpfiltered",   "enable true-peak mode filtered for BS.1770-3",   0, AV_OPT_TYPE_CONST, {.i64 = PEAK_MODE_TRUE_PEAKS_FILTERED},    INT_MIN, INT_MAX, A|F, "mode" },
     { "dualmono", "treat mono input files as dual-mono", OFFSET(dual_mono), AV_OPT_TYPE_BOOL, {.i64 = 0}, 0, 1, A|F },
     { "panlaw", "set a specific pan law for dual-mono files", OFFSET(pan_law), AV_OPT_TYPE_DOUBLE, {.dbl = -3.01029995663978}, -10.0, 0.0, A|F },
     { "target", "set a specific target level in LUFS (-23 to 0)", OFFSET(target), AV_OPT_TYPE_INT, {.i64 = -23}, -23, 0, V|F },
@@ -515,82 +509,76 @@ static int config_audio_output(AVFilterLink *outlink)
 #if CONFIG_SWRESAMPLE
     if (ebur128->peak_mode & PEAK_MODE_TRUE_PEAKS) {
         int ret;
-        unsigned int j;
 
         ebur128->swr_buf    = av_malloc_array(nb_channels, 19200 * sizeof(double));
         ebur128->true_peaks = av_calloc(nb_channels, sizeof(*ebur128->true_peaks));
         ebur128->true_peaks_per_frame = av_calloc(nb_channels, sizeof(*ebur128->true_peaks_per_frame));
         ebur128->swr_ctx    = swr_alloc();
-        ebur128->interp     = av_calloc(1, sizeof(interpolator));
         if (!ebur128->swr_buf || !ebur128->true_peaks ||
-            !ebur128->interp || !ebur128->true_peaks_per_frame || !ebur128->swr_ctx)
+            !ebur128->true_peaks_per_frame || !ebur128->swr_ctx)
             return AVERROR(ENOMEM);
 
-        if (outlink->sample_rate < 96000) {
-            ebur128->interp->factor = 4;
-        }
-        else if (outlink->sample_rate < 192000) {
-            ebur128->interp->factor = 2;
-        }
-        else {
-            ebur128->interp->factor = 1;
-        }
-
-        ebur128->interp->taps   = 49;
-        ebur128->interp->channels = nb_channels;
-        ebur128->interp->delay = (ebur128->interp->taps + ebur128->interp->factor - 1) / ebur128->interp->factor;
-        av_log(ctx, AV_LOG_INFO, "ITU BS.1770-3 FIR Info\n");
-        av_log(ctx, AV_LOG_INFO, "Factor: %d\n", ebur128->interp->factor);
-        av_log(ctx, AV_LOG_INFO, "Taps: %d\n", ebur128->interp->taps);
-        av_log(ctx, AV_LOG_INFO, "Delay: %d\n", ebur128->interp->delay);
-
-        ebur128->interp->filter = av_calloc(ebur128->interp->factor,
-                                            sizeof(*ebur128->interp->filter));
-
-        for (j = 0; j < ebur128->interp->factor; j++) {
-            ebur128->interp->filter[j].index =
-                av_calloc(ebur128->interp->delay, sizeof(unsigned int));
-            ebur128->interp->filter[j].coeff =
-                av_calloc(ebur128->interp->delay, sizeof(double));
-        }
-
-        ebur128->interp->z = av_calloc(ebur128->interp->channels, sizeof(float*));
-        for (j = 0; j < ebur128->interp->channels; j++) {
-            ebur128->interp->z[j] = av_calloc(ebur128->interp->delay, sizeof(float));
-        }
-
-        #if 0
-        /* Calculate the filter coefficients */
-        for (j = 0; j < ebur128->interp->taps; j++) {
-            /* Calculate sinc */
-            double m = (double) j - (double) (ebur128->interp->taps - 1) / 2.0;
-            double c = 1.0;
-            if (fabs(m) > ALMOST_ZERO) {
-              c = sin(m * M_PI / ebur128->interp->factor) / (m * M_PI / ebur128->interp->factor);
+        if (ebur128->peak_mode & FILTERED) {
+            unsigned int j, f;
+            ebur128->interp     = av_calloc(1, sizeof(interpolator));
+            if (!ebur128->interp) {
+                return AVERROR(ENOMEM);
             }
-            /* Apply Hanning window */
-            c *= 0.5 * (1 - cos(2 * M_PI * j / (ebur128->interp->taps - 1)));
 
-            if (fabs(c) > ALMOST_ZERO) { /* Ignore any zero coeffs. */
-              /* Put the coefficient into the correct subfilter */
-              unsigned int f = j % ebur128->interp->factor;
-              unsigned int t = ebur128->interp->filter[f].count++;
-
-              ebur128->interp->filter[f].coeff[t] = c;
-              ebur128->interp->filter[f].index[t] = j / ebur128->interp->factor;
+            if (outlink->sample_rate < 96000) {
+                ebur128->interp->factor = 4; // resampled from 48000 (or 44100) to 192000
             }
-        }
-        #else
+            else if (outlink->sample_rate < 192000) {
+                ebur128->interp->factor = 2; // resampled from 96000 to 192000
+            }
+            else {
+                ebur128->interp->factor = 1;
+            }
 
-        unsigned int f;
-        for (j = 0; j < 12; j++) {
-            for (f = 0; f < 4; f++) {
-                ebur128->interp->filter[f].coeff[j] = coeffs[f][j];
-                ebur128->interp->filter[f].index[j] = 49 / ebur128->interp->factor;
-                ebur128->interp->filter[f].count++;
+            ebur128->interp->taps   = 48;
+            ebur128->interp->channels = nb_channels;
+            ebur128->interp->delay = (ebur128->interp->taps + ebur128->interp->factor) / ebur128->interp->factor;
+            av_log(ctx, AV_LOG_INFO, "ITU BS.1770-3 FIR Info\n");
+            av_log(ctx, AV_LOG_INFO, "Factor: %d\n", ebur128->interp->factor);
+            av_log(ctx, AV_LOG_INFO, "Taps: %d\n", ebur128->interp->taps);
+            av_log(ctx, AV_LOG_INFO, "Delay: %d\n", ebur128->interp->delay);
+
+            ebur128->interp->filter = av_calloc(ebur128->interp->factor,
+                                                sizeof(*ebur128->interp->filter));
+
+            for (j = 0; j < ebur128->interp->factor; j++) {
+                ebur128->interp->filter[j].index =
+                    av_calloc(ebur128->interp->delay, sizeof(unsigned int));
+                ebur128->interp->filter[j].coeff =
+                    av_calloc(ebur128->interp->delay, sizeof(double));
+            }
+
+            ebur128->interp->z = av_calloc(ebur128->interp->channels, sizeof(float*));
+            for (j = 0; j < ebur128->interp->channels; j++) {
+                ebur128->interp->z[j] = av_calloc(ebur128->interp->delay, sizeof(float));
+            }
+
+            /* Calculate the filter coefficients */
+            for (j = 0; j < ebur128->interp->taps; j++) {
+                /* Calculate sinc */
+                double m = (double) j - (double) (ebur128->interp->taps) / 2.0;
+                double c = 1.0;
+                if (fabs(m) > ALMOST_ZERO) {
+                  c = sin(m * M_PI / ebur128->interp->factor) / (m * M_PI / ebur128->interp->factor);
+                }
+                /* Apply Hanning window */
+                c *= 0.5 * (1 - cos(2 * M_PI * j / (ebur128->interp->taps)));
+
+                if (fabs(c) > ALMOST_ZERO) { /* Ignore any zero coeffs. */
+                  /* Put the coefficient into the correct subfilter */
+                  unsigned int f = j % ebur128->interp->factor;
+                  unsigned int t = ebur128->interp->filter[f].count++;
+
+                  ebur128->interp->filter[f].coeff[t] = c;
+                  ebur128->interp->filter[f].index[t] = j / ebur128->interp->factor;
+                }
             }
         }
-        #endif
 
         av_opt_set_chlayout(ebur128->swr_ctx, "in_chlayout",   &outlink->ch_layout, 0);
         av_opt_set_int(ebur128->swr_ctx, "in_sample_rate",       outlink->sample_rate, 0);
@@ -739,15 +727,11 @@ static int filter_frame(AVFilterLink *inlink, AVFrame *insamples)
         unsigned int t = 0;
         if (ret < 0)
             return ret;
-        for (ch = 0; ch < nb_channels; ch++) {
+        for (ch = 0; ch < nb_channels; ch++)
             ebur128->true_peaks_per_frame[ch] = 0.0;
-        }
         for (idx_insample = 0; idx_insample < ret; idx_insample++) {
             for (ch = 0; ch < nb_channels; ch++) {
-                if (ebur128->peak_mode & PEAK_MODE_TRUE_PEAKS_FILTERED) {
-                    //av_log(ctx, AV_LOG_INFO, "Channel %d Sample %d FIR %0.16f SWR %0.16f\n",
-                    //        ch, idx_insample, acc, *swr_samples);
-
+                if (ebur128->peak_mode & FILTERED) {
                     // Add sample to delay buffer
                     ebur128->interp->z[ch][ebur128->interp->zi] = *swr_samples;
                     // Apply coefficients
@@ -760,10 +744,8 @@ static int filter_frame(AVFilterLink *inlink, AVFrame *insamples)
                             }
                             c = ebur128->interp->filter[f].coeff[t];
                             acc += (double)ebur128->interp->z[ch][i]*c;
-                            //av_log(ctx, ebur128->loglevel, "Factor: %d Count: %d coeff: %0.16f\n", f, t, c);
                         }
 
-                        //av_log(ctx, ebur128->loglevel, "CH: %d Factor: %d acc: %0.16f\n", ch, f, acc);
                         ebur128->true_peaks_per_frame[ch] = FFMAX(ebur128->true_peaks_per_frame[ch],
                                                                   fabs(acc));
 
@@ -777,7 +759,7 @@ static int filter_frame(AVFilterLink *inlink, AVFrame *insamples)
                 }
                 swr_samples++;
             }
-            if (ebur128->peak_mode & PEAK_MODE_TRUE_PEAKS_FILTERED) {
+            if (ebur128->peak_mode & FILTERED) {
                 ebur128->interp->zi++;
                 if (ebur128->interp->zi == ebur128->interp->delay) {
                   ebur128->interp->zi = 0;
@@ -1085,7 +1067,7 @@ static int filter_frame(AVFilterLink *inlink, AVFrame *insamples)
     if (ebur128->peak_mode & PEAK_MODE_ ## ptype ## _PEAKS) {       \
         av_log(ctx, ebur128->loglevel, "  " str ":");               \
         for (ch = 0; ch < nb_channels; ch++)                        \
-            av_log(ctx, ebur128->loglevel, " %5.1f", DBFS(sp[ch])); \
+            av_log(ctx, ebur128->loglevel, " %7.3f", DBFS(sp[ch])); \
         av_log(ctx, ebur128->loglevel, " dBFS");                    \
     }                                                               \
 } while (0)
@@ -1251,6 +1233,20 @@ static av_cold void uninit(AVFilterContext *ctx)
     av_freep(&ebur128->swr_buf);
     swr_free(&ebur128->swr_ctx);
 #endif
+
+    if (ebur128->peak_mode & FILTERED && ebur128->interp) {
+        for (i = 0; i < ebur128->interp->factor; i++) {
+            av_freep(&ebur128->interp->filter[i].index);
+            av_freep(&ebur128->interp->filter[i].coeff);
+        }
+        av_freep(&ebur128->interp->filter);
+
+        for (i = 0; i < ebur128->interp->channels; i++) {
+            av_freep(&ebur128->interp->z[i]);
+        }
+        av_freep(&ebur128->interp->z);
+        av_freep(&ebur128->interp);
+    }
 }
 
 static const AVFilterPad ebur128_inputs[] = {
