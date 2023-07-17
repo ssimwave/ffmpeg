@@ -525,16 +525,7 @@ static int config_audio_output(AVFilterLink *outlink)
                 return AVERROR(ENOMEM);
             }
 
-            if (outlink->sample_rate < 96000) {
-                ebur128->interp->factor = 4; // resampled from 48000 (or 44100) to 192000
-            }
-            else if (outlink->sample_rate < 192000) {
-                ebur128->interp->factor = 2; // resampled from 96000 to 192000
-            }
-            else {
-                ebur128->interp->factor = 1;
-            }
-
+            ebur128->interp->factor = 1;
             ebur128->interp->taps   = 48;
             ebur128->interp->channels = nb_channels;
             ebur128->interp->delay = (ebur128->interp->taps + ebur128->interp->factor) / ebur128->interp->factor;
