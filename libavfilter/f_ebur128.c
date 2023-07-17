@@ -1058,7 +1058,7 @@ static int filter_frame(AVFilterLink *inlink, AVFrame *insamples)
     if (ebur128->peak_mode & PEAK_MODE_ ## ptype ## _PEAKS) {       \
         av_log(ctx, ebur128->loglevel, "  " str ":");               \
         for (ch = 0; ch < nb_channels; ch++)                        \
-            av_log(ctx, ebur128->loglevel, " %7.3f", DBFS(sp[ch])); \
+            av_log(ctx, ebur128->loglevel, " %5.1f", DBFS(sp[ch])); \
         av_log(ctx, ebur128->loglevel, " dBFS");                    \
     }                                                               \
 } while (0)
