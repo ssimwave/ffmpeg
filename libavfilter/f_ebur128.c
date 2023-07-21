@@ -23,6 +23,7 @@
  * EBU R.128 implementation
  * @see http://tech.ebu.ch/loudness
  * @see https://www.youtube.com/watch?v=iuEtQqC-Sqo "EBU R128 Introduction - Florian Camerer"
+ * @see https://github.com/jiixyj/libebur128/blob/master/ebur128/ebur128.c "FIR interpolating filter implementation"
  * @todo implement start/stop/reset through filter command injection
  */
 
@@ -79,7 +80,7 @@ typedef struct interp_filter {
   unsigned int count;  /* Number of coefficients in this subfilter */
   unsigned int* index; /* Delay index of corresponding filter coeff */
   double* coeff;       /* List of subfilter coefficients */
-}interp_filter;
+} interp_filter;
 
 typedef struct interpolator {         /* Data structure for polyphase FIR interpolator */
   unsigned int factor;   /* Interpolation factor of the interpolator */
@@ -197,7 +198,7 @@ static const AVOption ebur128_options[] = {
         { "none",   "disable any peak mode",   0, AV_OPT_TYPE_CONST, {.i64 = PEAK_MODE_NONE},          INT_MIN, INT_MAX, A|F, "mode" },
         { "sample", "enable peak-sample mode", 0, AV_OPT_TYPE_CONST, {.i64 = PEAK_MODE_SAMPLES_PEAKS}, INT_MIN, INT_MAX, A|F, "mode" },
         { "true",   "enable true-peak mode",   0, AV_OPT_TYPE_CONST, {.i64 = PEAK_MODE_TRUE_PEAKS},    INT_MIN, INT_MAX, A|F, "mode" },
-        { "tpfiltered",   "enable true-peak mode filtered for BS.1770-3",   0, AV_OPT_TYPE_CONST, {.i64 = PEAK_MODE_TRUE_PEAKS_FILTERED},    INT_MIN, INT_MAX, A|F, "mode" },
+        { "tpfiltered",   "enable true-peak mode filtered for BS.1770-3+",   0, AV_OPT_TYPE_CONST, {.i64 = PEAK_MODE_TRUE_PEAKS_FILTERED},    INT_MIN, INT_MAX, A|F, "mode" },
     { "dualmono", "treat mono input files as dual-mono", OFFSET(dual_mono), AV_OPT_TYPE_BOOL, {.i64 = 0}, 0, 1, A|F },
     { "panlaw", "set a specific pan law for dual-mono files", OFFSET(pan_law), AV_OPT_TYPE_DOUBLE, {.dbl = -3.01029995663978}, -10.0, 0.0, A|F },
     { "target", "set a specific target level in LUFS (-23 to 0)", OFFSET(target), AV_OPT_TYPE_INT, {.i64 = -23}, -23, 0, V|F },
@@ -712,10 +713,6 @@ static int filter_frame(AVFilterLink *inlink, AVFrame *insamples)
         const double *swr_samples = ebur128->swr_buf;
         int ret = swr_convert(ebur128->swr_ctx, (uint8_t**)&ebur128->swr_buf, 19200,
                               (const uint8_t **)insamples->data, nb_samples);
-        double acc = 0;
-        double c = 0;
-        unsigned int f = 0;
-        unsigned int t = 0;
         if (ret < 0)
             return ret;
         for (ch = 0; ch < nb_channels; ch++)
@@ -723,6 +720,10 @@ static int filter_frame(AVFilterLink *inlink, AVFrame *insamples)
         for (idx_insample = 0; idx_insample < ret; idx_insample++) {
             for (ch = 0; ch < nb_channels; ch++) {
                 if (ebur128->peak_mode & FILTERED) {
+                    double acc = 0;
+                    double c = 0;
+                    unsigned int f = 0;
+                    unsigned int t = 0;
                     // Add sample to delay buffer
                     ebur128->interp->z[ch][ebur128->interp->zi] = *swr_samples;
                     // Apply coefficients
