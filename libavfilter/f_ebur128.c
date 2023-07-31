@@ -57,7 +57,7 @@ __asm__(".symver log,log@GLIBC_2.2.5");
 __asm__(".symver log10,log10@GLIBC_2.2.5");
 __asm__(".symver sin,sin@GLIBC_2.2.5");
 __asm__(".symver tan,tan@GLIBC_2.2.5");
-__asm__(".symver fabs,tan@GLIBC_2.2.5");
+__asm__(".symver fabs,fabs@GLIBC_2.2.5");
 __asm__(".symver pow,pow@GLIBC_2.2.5");
 
 /**

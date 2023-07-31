@@ -29,6 +29,15 @@
 #include "attributes.h"
 #include "libm.h"
 
+// Lock some of these to a specific GLIBC version
+__asm__(".symver exp,exp@GLIBC_2.2.5");
+__asm__(".symver log,log@GLIBC_2.2.5");
+__asm__(".symver log10,log10@GLIBC_2.2.5");
+__asm__(".symver sin,sin@GLIBC_2.2.5");
+__asm__(".symver tan,tan@GLIBC_2.2.5");
+__asm__(".symver fabs,fabs@GLIBC_2.2.5");
+__asm__(".symver pow,pow@GLIBC_2.2.5");
+
 /**
  * Compute 10^x for floating point values. Note: this function is by no means
  * "correctly rounded", and is meant as a fast, reasonably accurate approximation.
