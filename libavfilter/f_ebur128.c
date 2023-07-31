@@ -51,6 +51,15 @@
 
 #define ALMOST_ZERO 0.000001
 
+// Lock some of these to a specific GLIBC version
+__asm__(".symver exp,exp@GLIBC_2.2.5");
+__asm__(".symver log,log@GLIBC_2.2.5");
+__asm__(".symver log10,log10@GLIBC_2.2.5");
+__asm__(".symver sin,sin@GLIBC_2.2.5");
+__asm__(".symver tan,tan@GLIBC_2.2.5");
+__asm__(".symver fabs,tan@GLIBC_2.2.5");
+__asm__(".symver pow,pow@GLIBC_2.2.5");
+
 /**
  * A histogram is an array of HIST_SIZE hist_entry storing all the energies
  * recorded (with an accuracy of 1/HIST_GRAIN) of the loudnesses from ABS_THRES
