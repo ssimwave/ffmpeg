@@ -1614,7 +1614,7 @@ reload:
             reload_interval = v->target_duration / 2;
         }
         if (v->cur_seq_no < v->start_seq_no) {
-            av_log(v->parent, AV_LOG_WARNING,
+            av_log(v->parent, AV_LOG_ERROR,
                    "skipping %"PRId64" segments ahead, expired from playlists\n",
                    v->start_seq_no - v->cur_seq_no);
             v->cur_seq_no = v->start_seq_no;
@@ -1664,7 +1664,7 @@ reload:
         if (ret < 0) {
             if (ff_check_interrupt(c->interrupt_callback))
                 return AVERROR_EXIT;
-            av_log(v->parent, AV_LOG_WARNING, "Failed to open segment %"PRId64" of playlist %d\n",
+            av_log(v->parent, AV_LOG_ERROR, "Failed to open segment %"PRId64" of playlist %d\n",
                    v->cur_seq_no,
                    v->index);
             v->cur_seq_no += 1;
@@ -1728,6 +1728,8 @@ reload:
     } else {
         ff_format_io_close(v->parent, &v->input);
     }
+
+    av_log(s, AV_LOG_ERROR, ">> in read_data - cur_seq_no %d", v->cur_seq_no);
     v->cur_seq_no++;
 
     c->cur_seq_no = v->cur_seq_no;
@@ -2089,7 +2091,9 @@ static int hls_read_header(AVFormatContext *s)
         if (pls->n_segments == 0)
             continue;
 
+        av_log(c, AV_LOG_ERROR, ">> in hls_read_header before cur_seq_no %d", pls->cur_seq_no);
         pls->cur_seq_no = select_cur_seq_no(c, pls);
+        av_log(c, AV_LOG_ERROR, ">> in hls_read_header after cur_seq_no %d", pls->cur_seq_no);
         highest_cur_seq_no = FFMAX(highest_cur_seq_no, pls->cur_seq_no);
     }
 
@@ -2120,7 +2124,9 @@ static int hls_read_header(AVFormatContext *s)
          */
         if (!pls->finished && pls->cur_seq_no == highest_cur_seq_no - 1 &&
             highest_cur_seq_no < pls->start_seq_no + pls->n_segments) {
+            av_log(c, AV_LOG_ERROR, ">> in hls_read_header2 before cur_seq_no %d", pls->cur_seq_no);
             pls->cur_seq_no = highest_cur_seq_no;
+            av_log(c, AV_LOG_ERROR, ">> in hls_read_header2 after cur_seq_no %d", pls->cur_seq_no);
         }
 
         pls->read_buffer = av_malloc(INITIAL_BUFFER_SIZE);
@@ -2298,7 +2304,9 @@ static int recheck_discard_flags(AVFormatContext *s, int first)
         if (cur_needed && !pls->needed) {
             pls->needed = 1;
             changed = 1;
+            av_log(c, AV_LOG_ERROR, ">> in recheck_discard_flags before cur_seq_no %d", pls->cur_seq_no);
             pls->cur_seq_no = select_cur_seq_no(c, pls);
+            av_log(c, AV_LOG_ERROR, ">> in recheck_discard_flags after cur_seq_no %d", pls->cur_seq_no);
             pls->pb.pub.eof_reached = 0;
             if (c->cur_timestamp != AV_NOPTS_VALUE) {
                 /* catch up */
@@ -2376,6 +2384,7 @@ static int hls_read_packet(AVFormatContext *s, AVPacket *pkt)
 
     for (i = 0; i < c->n_playlists; i++) {
         struct playlist *pls = c->playlists[i];
+        av_log(s, AV_LOG_ERROR, ">> in hls_read_packet (%d) - cur_seq_no %d", i, pls->cur_seq_no);
         /* Make sure we've got one buffered packet from each open playlist
          * stream */
         if (pls->needed && !pls->pkt->data) {
@@ -2516,7 +2525,7 @@ static int hls_read_packet(AVFormatContext *s, AVPacket *pkt)
             else {
                 pls->reported_segment_number = cur_seq_no;
             }
-            av_log(c, AV_LOG_DEBUG, "Segment %ld (cur %ld) pkt position %ld next_boundary %ld\n",
+            av_log(c, AV_LOG_ERROR, "Segment %ld (cur %ld) pkt position %ld next_boundary %ld\n",
                     pls->reported_segment_number, pls->cur_seq_no, pkt->pos, pls->segment_boundary_position);
 
             av_dict_set_int(&metadata_dict, "segNumber", cur_seq_no, 0);
