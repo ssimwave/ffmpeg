@@ -2565,7 +2565,7 @@ static const AVOption dash_options[] = {
     { "selected_audio_rep_id", "Audio represention ID to filter on",
         OFFSET(selected_audio_rep_id), AV_OPT_TYPE_STRING, {.str = NULL}, .flags = FLAGS},
     { "use_independent_segment_fetch_for_obtaining_size", "Use patch for obtaining segment size (ie. double download)",
-        OFFSET(use_independent_segment_fetch_for_obtaining_size), AV_OPT_TYPE_BOOL, {.i64 = 1}, 0, 1, FLAGS},
+        OFFSET(use_independent_segment_fetch_for_obtaining_size), AV_OPT_TYPE_BOOL, {.i64 = 0}, 0, 1, FLAGS},
     {NULL}
 };
 
