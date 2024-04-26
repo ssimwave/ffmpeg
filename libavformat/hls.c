@@ -251,6 +251,7 @@ typedef struct HLSContext {
     int variant_count;
     char *sample_aes_iv;
     char *sample_aes_cek_location;
+    int use_independent_segment_fetch_for_obtaining_size;
 } HLSContext;
 
 static int64_t get_actual_segment_size(struct playlist *pls, struct segment* seg) {
@@ -266,7 +267,6 @@ static int64_t get_actual_segment_size(struct playlist *pls, struct segment* seg
     }
     ff_format_io_close(s, &pb);
     av_dict_free(&opts);
-    av_log(s, AV_LOG_DEBUG, "Segment %s, size %ld\n", seg->url, actual_size);
     return actual_size;
 }
 
@@ -1453,9 +1453,26 @@ static int open_input(HLSContext *c, struct playlist *pls, struct segment *seg, 
         }
     }
 
-    if (filesize != UINT64_MAX) {
-        seg->actual_size = filesize;
+    if (ret >= 0) {
+        if (c->use_independent_segment_fetch_for_obtaining_size) {
+            // Download to get the actual size of the segment
+            seg->actual_size = get_actual_segment_size(pls, seg);
+        }
+        else if (filesize != UINT64_MAX) {
+            // Use size reported by HTTP module, if available
+            seg->actual_size = filesize;
+        }
+        else {
+            // Unknown
+            seg->actual_size = -1;
+        }
     }
+    else {
+        seg->actual_size = -1;
+    }
+
+    av_log(pls->parent, AV_LOG_DEBUG, "Segment %s, size %ld, initial download %s\n",
+        seg->url, seg->actual_size, ret >= 0 ? "successful" : "failed");
 
 cleanup:
     av_dict_free(&opts);
@@ -2698,6 +2715,8 @@ static const AVOption hls_options[] = {
     {"sample_aes_cek_location", "URI of the location of the Sample AES stream",
         OFFSET(sample_aes_cek_location), AV_OPT_TYPE_STRING,
         {.str = ""}, 0, 0, FLAGS},
+    { "use_independent_segment_fetch_for_obtaining_size", "Use patch for obtaining segment size (ie. double download)",
+        OFFSET(use_independent_segment_fetch_for_obtaining_size), AV_OPT_TYPE_BOOL, {.i64 = 1}, 0, 1, FLAGS},
     {NULL}
 };
 
