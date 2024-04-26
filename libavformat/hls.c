@@ -712,13 +712,18 @@ static int open_url_keepalive(AVFormatContext *s, AVIOContext **pb,
 
 static int open_url(AVFormatContext *s, AVIOContext **pb, const char *url,
                     AVDictionary **opts, AVDictionary *opts2, int *is_http_out,
-                    const AVStream** streams, size_t num_streams)
+                    const AVStream** streams, size_t num_streams, uint64_t* filesize)
 {
     HLSContext *c = s->priv_data;
     AVDictionary *tmp = NULL;
     const char *proto_name = NULL;
     int ret;
     int is_http = 0;
+
+    if (!filesize) {
+        return AVERROR_INVALIDDATA;
+    }
+    *filesize = UINT64_MAX;
 
     if (av_strstart(url, "crypto", NULL)) {
         if (url[6] == '+' || url[6] == ':')
@@ -794,6 +799,10 @@ static int open_url(AVFormatContext *s, AVIOContext **pb, const char *url,
         *is_http_out = is_http;
 
     if (is_http) {
+        AVDictionaryEntry* filesize_entry = av_dict_get(tmp, "http_filesize", NULL, 0);
+        if (filesize_entry) {
+            *filesize = strtoull(filesize_entry->value, NULL, 10);
+        }
         if (s && s->http_response_code_callback) {
             AVDictionaryEntry* method_entry = av_dict_get(tmp, "http_cache_method", NULL, 0);
             AVDictionaryEntry* status_code_entry = av_dict_get(tmp, "http_cache_status_code", NULL, 0);
@@ -1371,6 +1380,7 @@ static int open_input(HLSContext *c, struct playlist *pls, struct segment *seg, 
     AVDictionary *opts = NULL;
     int ret;
     int is_http = 0;
+    int64_t filesize = UINT64_MAX;
 
     if (c->http_persistent)
         av_dict_set(&opts, "multiple_requests", "1", 0);
@@ -1388,7 +1398,7 @@ static int open_input(HLSContext *c, struct playlist *pls, struct segment *seg, 
     if (seg->key_type == KEY_AES_128 || seg->key_type == KEY_SAMPLE_AES) {
         if (strcmp(seg->key, pls->key_url)) {
             AVIOContext *pb = NULL;
-            if (open_url(pls->parent, &pb, seg->key, &c->avio_opts, opts, NULL, pls->main_streams, pls->n_main_streams) == 0) {
+            if (open_url(pls->parent, &pb, seg->key, &c->avio_opts, opts, NULL, pls->main_streams, pls->n_main_streams, &filesize) == 0) {
                 ret = avio_read(pb, pls->key, sizeof(pls->key));
                 if (ret != sizeof(pls->key)) {
                     av_log(pls->parent, AV_LOG_ERROR, "Unable to read key file %s\n",
@@ -1415,13 +1425,13 @@ static int open_input(HLSContext *c, struct playlist *pls, struct segment *seg, 
         av_dict_set(&opts, "key", key, 0);
         av_dict_set(&opts, "iv", iv, 0);
 
-        ret = open_url(pls->parent, in, url, &c->avio_opts, opts, &is_http, pls->main_streams, pls->n_main_streams);
+        ret = open_url(pls->parent, in, url, &c->avio_opts, opts, &is_http, pls->main_streams, pls->n_main_streams, &filesize);
         if (ret < 0) {
             goto cleanup;
         }
         ret = 0;
     } else {
-        ret = open_url(pls->parent, in, seg->url, &c->avio_opts, opts, &is_http, pls->main_streams, pls->n_main_streams);
+        ret = open_url(pls->parent, in, seg->url, &c->avio_opts, opts, &is_http, pls->main_streams, pls->n_main_streams, &filesize);
     }
 
     /* Seek to the requested position. If this was a HTTP request, the offset
@@ -1441,6 +1451,10 @@ static int open_input(HLSContext *c, struct playlist *pls, struct segment *seg, 
             ret = seekret;
             ff_format_io_close(pls->parent, in);
         }
+    }
+
+    if (filesize != UINT64_MAX) {
+        seg->actual_size = filesize;
     }
 
 cleanup:
@@ -1644,9 +1658,6 @@ reload:
 
         v->input_read_done = 0;
         seg = current_segment(v);
-
-        // Get actual segment size
-        seg->actual_size = get_actual_segment_size(v, seg);
 
         /* load/update Media Initialization Section, if any */
         ret = update_init_section(v, seg);
