@@ -2716,7 +2716,7 @@ static const AVOption hls_options[] = {
         OFFSET(sample_aes_cek_location), AV_OPT_TYPE_STRING,
         {.str = ""}, 0, 0, FLAGS},
     { "use_independent_segment_fetch_for_obtaining_size", "Use patch for obtaining segment size (ie. double download)",
-        OFFSET(use_independent_segment_fetch_for_obtaining_size), AV_OPT_TYPE_BOOL, {.i64 = 1}, 0, 1, FLAGS},
+        OFFSET(use_independent_segment_fetch_for_obtaining_size), AV_OPT_TYPE_BOOL, {.i64 = 0}, 0, 1, FLAGS},
     {NULL}
 };
 
