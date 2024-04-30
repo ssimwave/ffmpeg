@@ -211,6 +211,9 @@ static void http_add_status_data(URLContext* h, AVDictionary** dict) {
         av_dict_set(dict, "http_cache_method", s->post_data ? "POST" : "GET", 0);
     }
     av_dict_set_int(dict, "http_cache_status_code", s->http_code, 0);
+
+    h->filesize = s->filesize;
+    h->filesize_reported = 1;
 }
 
 void ff_http_init_auth_state(URLContext *dest, const URLContext *src)

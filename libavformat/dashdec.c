@@ -156,10 +156,11 @@ typedef struct DASHContext {
     /* AdaptationSet Attribute */
     char *adaptionset_lang;
 
-// SSIMWAVE ADDITIONS
+    // SSIMWAVE ADDITIONS
     int use_timeline_segment_offset_correction;
     int fetch_completed_segments_only;
-// END SSIMWAVE ADDITIONS
+    int use_independent_segment_fetch_for_obtaining_size;
+    // END SSIMWAVE ADDITIONS
 
     int is_live;
     AVIOInterruptCB *interrupt_callback;
@@ -1808,30 +1809,39 @@ static int open_input(DASHContext *c, struct representation *pls, struct fragmen
 
     ff_make_absolute_url(url, MAX_URL_SIZE, c->base_url, seg->url);
 
-    // SSIMWAVE
-    {
-        AVDictionary *tmpOpts = NULL;
-        URLContext* urlCtx = NULL;
 
-        av_dict_copy(&tmpOpts, c->avio_opts, 0);
-        // Calculating Segment Size (in Bytes). Using ffurl_seek is much faster than avio_size
-        // TODO Validate this
-        if (ffurl_open_whitelist(&urlCtx, url, AVIO_FLAG_READ,
-                                 &tmpOpts, NULL,
-                                 pls->parent->protocol_whitelist, pls->parent->protocol_blacklist, NULL) >= 0) {
-            seg->size = ffurl_seek(urlCtx, 0, AVSEEK_SIZE);
+    ret = open_url(pls->parent, &pls->input, url, &c->avio_opts, opts, NULL, pls->assoc_stream);
+
+    // Default to unknown size, if unavailable
+    seg->size = -1;
+    if (ret >= 0) {
+        if (c->use_independent_segment_fetch_for_obtaining_size) {
+            // Download to get the actual size of the segment
+            AVDictionary *tmpOpts = NULL;
+            URLContext* urlCtx = NULL;
+
+            av_dict_copy(&tmpOpts, c->avio_opts, 0);
+            // Calculating Segment Size (in Bytes). Using ffurl_seek is much faster than avio_size
+            if (ffurl_open_whitelist(&urlCtx, url, 0, NULL, &tmpOpts, NULL, NULL, NULL) >= 0) {
+                seg->size = ffurl_seek(urlCtx, 0, AVSEEK_SIZE);
+            }
+            else {
+                seg->size = -1;
+            }
+            av_dict_free(&tmpOpts);
+            ffurl_close(urlCtx);
         }
         else {
-            seg->size = -1;
+            // Use size reported by file/http module, if available
+            URLContext *urlc = ffio_geturlcontext(pls->input);
+            if (urlc && urlc->filesize_reported) {
+                seg->size = urlc->filesize;
+            }
         }
-        av_dict_free(&tmpOpts);
-        ffurl_close(urlCtx);
-        av_log(NULL, AV_LOG_DEBUG, "Seg: url: %s,  size = %"PRId64"\n", url, seg->size);
     }
 
-    av_log(pls->parent, AV_LOG_VERBOSE, "DASH request for url '%s', offset %"PRId64"\n",
-           url, seg->url_offset);
-    ret = open_url(pls->parent, &pls->input, url, &c->avio_opts, opts, NULL, pls->assoc_stream);
+    av_log(pls->parent, AV_LOG_DEBUG, "Segment %s, size %ld, initial download %s\n",
+        url, seg->size, ret >= 0 ? "successful" : "failed");
 
 cleanup:
     av_free(url);
@@ -2535,6 +2545,8 @@ static const AVOption dash_options[] = {
         OFFSET(selected_video_rep_id), AV_OPT_TYPE_STRING, {.str = NULL}, .flags = FLAGS},
     { "selected_audio_rep_id", "Audio represention ID to filter on",
         OFFSET(selected_audio_rep_id), AV_OPT_TYPE_STRING, {.str = NULL}, .flags = FLAGS},
+    { "use_independent_segment_fetch_for_obtaining_size", "Use patch for obtaining segment size (ie. double download)",
+        OFFSET(use_independent_segment_fetch_for_obtaining_size), AV_OPT_TYPE_BOOL, {.i64 = 0}, 0, 1, FLAGS},
     {NULL}
 };
 
