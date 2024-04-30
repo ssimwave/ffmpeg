@@ -153,10 +153,11 @@ typedef struct DASHContext {
     /* AdaptationSet Attribute */
     char *adaptionset_lang;
 
-// SSIMWAVE ADDITIONS
+    // SSIMWAVE ADDITIONS
     int use_timeline_segment_offset_correction;
     int fetch_completed_segments_only;
-// END SSIMWAVE ADDITIONS
+    int use_independent_segment_fetch_for_obtaining_size;
+    // END SSIMWAVE ADDITIONS
 
     int is_live;
     AVIOInterruptCB *interrupt_callback;
@@ -421,7 +422,7 @@ static void free_subtitle_list(DASHContext *c)
 
 static int open_url(AVFormatContext *s, AVIOContext **pb, const char *url,
                     AVDictionary **opts, AVDictionary *opts2, int *is_http,
-                    const AVStream* stream)
+                    const AVStream* stream, uint64_t* filesize)
 {
     DASHContext *c = s->priv_data;
     AVDictionary *tmp = NULL;
@@ -429,6 +430,11 @@ static int open_url(AVFormatContext *s, AVIOContext **pb, const char *url,
     int proto_name_len;
     int ret;
     int is_proto_http = 0;
+
+    if (!filesize) {
+        return AVERROR_INVALIDDATA;
+    }
+    *filesize = UINT64_MAX;
 
     if (av_strstart(url, "crypto", NULL)) {
         if (url[6] == '+' || url[6] == ':')
@@ -487,6 +493,10 @@ static int open_url(AVFormatContext *s, AVIOContext **pb, const char *url,
     }
 
     if (is_proto_http) {
+        AVDictionaryEntry* filesize_entry = av_dict_get(tmp, "http_filesize", NULL, 0);
+        if (filesize_entry) {
+            *filesize = strtoull(filesize_entry->value, NULL, 10);
+        }
         if (s && s->http_response_code_callback) {
             AVDictionaryEntry* method_entry = av_dict_get(tmp, "http_cache_method", NULL, 0);
             AVDictionaryEntry* status_code_entry = av_dict_get(tmp, "http_cache_status_code", NULL, 0);
@@ -1790,6 +1800,7 @@ static int open_input(DASHContext *c, struct representation *pls, struct fragmen
     AVDictionary *opts = NULL;
     char *url = NULL;
     int ret = 0;
+    uint64_t filesize = 0;
 
     url = av_mallocz(c->max_url_size);
     if (!url) {
@@ -1806,27 +1817,42 @@ static int open_input(DASHContext *c, struct representation *pls, struct fragmen
 
     ff_make_absolute_url(url, MAX_URL_SIZE, c->base_url, seg->url);
 
-    // SSIMWAVE
-    {
-        AVDictionary *tmpOpts = NULL;
-        URLContext* urlCtx = NULL;
-
-        av_dict_copy(&tmpOpts, c->avio_opts, 0);
-        // Calculating Segment Size (in Bytes). Using ffurl_seek is much faster than avio_size
-        if (ffurl_open_whitelist(&urlCtx, url, 0, NULL, &tmpOpts, NULL, NULL, NULL) >= 0) {
-            seg->size = ffurl_seek(urlCtx, 0, AVSEEK_SIZE);
-        }
-        else {
-            seg->size = -1;
-        }
-        av_dict_free(&tmpOpts);
-        ffurl_close(urlCtx);
-        av_log(NULL, AV_LOG_DEBUG, "Seg: url: %s,  size = %"PRId64"\n", url, seg->size);
-    }
-
     av_log(pls->parent, AV_LOG_VERBOSE, "DASH request for url '%s', offset %"PRId64"\n",
            url, seg->url_offset);
-    ret = open_url(pls->parent, &pls->input, url, &c->avio_opts, opts, NULL, pls->assoc_stream);
+
+    ret = open_url(pls->parent, &pls->input, url, &c->avio_opts, opts, NULL, pls->assoc_stream, &filesize);
+
+    if (ret >= 0) {
+        if (c->use_independent_segment_fetch_for_obtaining_size) {
+            // Download to get the actual size of the segment
+            AVDictionary *tmpOpts = NULL;
+            URLContext* urlCtx = NULL;
+
+            av_dict_copy(&tmpOpts, c->avio_opts, 0);
+            // Calculating Segment Size (in Bytes). Using ffurl_seek is much faster than avio_size
+            if (ffurl_open_whitelist(&urlCtx, url, 0, NULL, &tmpOpts, NULL, NULL, NULL) >= 0) {
+                seg->size = ffurl_seek(urlCtx, 0, AVSEEK_SIZE);
+            }
+            else {
+                seg->size = -1;
+            }
+            av_dict_free(&tmpOpts);
+            ffurl_close(urlCtx);
+        }
+        else if (filesize != UINT64_MAX) {
+            // Use size reported by HTTP module, if available
+            seg->size = filesize;
+        }
+        else {
+            // Unknown
+            seg->size = -1;
+        }
+    } else {
+        seg->size = -1;
+    }
+
+    av_log(pls->parent, AV_LOG_DEBUG, "Segment %s, size %ld, initial download %s\n",
+        url, seg->size, ret >= 0 ? "successful" : "failed");
 
 cleanup:
     av_free(url);
@@ -2538,6 +2564,8 @@ static const AVOption dash_options[] = {
         OFFSET(selected_video_rep_id), AV_OPT_TYPE_STRING, {.str = NULL}, .flags = FLAGS},
     { "selected_audio_rep_id", "Audio represention ID to filter on",
         OFFSET(selected_audio_rep_id), AV_OPT_TYPE_STRING, {.str = NULL}, .flags = FLAGS},
+    { "use_independent_segment_fetch_for_obtaining_size", "Use patch for obtaining segment size (ie. double download)",
+        OFFSET(use_independent_segment_fetch_for_obtaining_size), AV_OPT_TYPE_BOOL, {.i64 = 0}, 0, 1, FLAGS},
     {NULL}
 };
 
