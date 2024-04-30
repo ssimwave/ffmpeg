@@ -1628,7 +1628,11 @@ static int refresh_manifest(AVFormatContext *s)
                n_subtitles, c->n_subtitles);
         return AVERROR_INVALIDDATA;
     }
-
+    /* It is possible for the demuxer to be processing at the live edge and waiting for a segment in the future.
+     * When that happens 'cur_seq_no' can be past the end of the timelines indicated by the MPD.
+     * The functions below that attempt to calculate the next segment number based on the timeline data will end up
+     * clamping to the end of the MPD, which would cause the segment number to go backwards.
+     * To prevent this, we make sure the segment number never decreases. */
     for (i = 0; i < n_videos; i++) {
         struct representation *cur_video = videos[i];
         struct representation *ccur_video = c->videos[i];
@@ -1638,7 +1642,7 @@ static int refresh_manifest(AVFormatContext *s)
             // update segments
             int64_t newSeqNo = calc_next_seg_no_from_timelines(c, ccur_video, currentTime * ccur_video->fragment_timescale - 1);
             if (newSeqNo >= 0) {
-                ccur_video->cur_seq_no = newSeqNo;
+                ccur_video->cur_seq_no = FFMAX(newSeqNo, cur_video->cur_seq_no);
                 move_timelines(ccur_video, cur_video, c);
             }
         }
@@ -1655,7 +1659,7 @@ static int refresh_manifest(AVFormatContext *s)
             // update segments
             int newSeqNo = calc_next_seg_no_from_timelines(c, ccur_audio, currentTime * ccur_audio->fragment_timescale - 1);
             if (newSeqNo >= 0) {
-                ccur_audio->cur_seq_no = newSeqNo;
+                ccur_audio->cur_seq_no = FFMAX(newSeqNo, cur_audio->cur_seq_no);
                 move_timelines(ccur_audio, cur_audio, c);
             }
         }
