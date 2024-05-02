@@ -422,7 +422,7 @@ static void free_subtitle_list(DASHContext *c)
 
 static int open_url(AVFormatContext *s, AVIOContext **pb, const char *url,
                     AVDictionary **opts, AVDictionary *opts2, int *is_http,
-                    const AVStream* stream, uint64_t* filesize)
+                    const AVStream* stream)
 {
     DASHContext *c = s->priv_data;
     AVDictionary *tmp = NULL;
@@ -430,11 +430,6 @@ static int open_url(AVFormatContext *s, AVIOContext **pb, const char *url,
     int proto_name_len;
     int ret;
     int is_proto_http = 0;
-
-    if (!filesize) {
-        return AVERROR_INVALIDDATA;
-    }
-    *filesize = UINT64_MAX;
 
     if (av_strstart(url, "crypto", NULL)) {
         if (url[6] == '+' || url[6] == ':')
@@ -493,10 +488,6 @@ static int open_url(AVFormatContext *s, AVIOContext **pb, const char *url,
     }
 
     if (is_proto_http) {
-        AVDictionaryEntry* filesize_entry = av_dict_get(tmp, "http_filesize", NULL, 0);
-        if (filesize_entry) {
-            *filesize = strtoull(filesize_entry->value, NULL, 10);
-        }
         if (s && s->http_response_code_callback) {
             AVDictionaryEntry* method_entry = av_dict_get(tmp, "http_cache_method", NULL, 0);
             AVDictionaryEntry* status_code_entry = av_dict_get(tmp, "http_cache_status_code", NULL, 0);
@@ -1804,7 +1795,6 @@ static int open_input(DASHContext *c, struct representation *pls, struct fragmen
     AVDictionary *opts = NULL;
     char *url = NULL;
     int ret = 0;
-    uint64_t filesize = 0;
 
     url = av_mallocz(c->max_url_size);
     if (!url) {
@@ -1824,8 +1814,10 @@ static int open_input(DASHContext *c, struct representation *pls, struct fragmen
     av_log(pls->parent, AV_LOG_VERBOSE, "DASH request for url '%s', offset %"PRId64"\n",
            url, seg->url_offset);
 
-    ret = open_url(pls->parent, &pls->input, url, &c->avio_opts, opts, NULL, pls->assoc_stream, &filesize);
+    ret = open_url(pls->parent, &pls->input, url, &c->avio_opts, opts, NULL, pls->assoc_stream);
 
+    // Default to unknown size, if unavailable
+    seg->size = -1;
     if (ret >= 0) {
         if (c->use_independent_segment_fetch_for_obtaining_size) {
             // Download to get the actual size of the segment
@@ -1843,16 +1835,13 @@ static int open_input(DASHContext *c, struct representation *pls, struct fragmen
             av_dict_free(&tmpOpts);
             ffurl_close(urlCtx);
         }
-        else if (filesize != UINT64_MAX) {
-            // Use size reported by HTTP module, if available
-            seg->size = filesize;
-        }
         else {
-            // Unknown
-            seg->size = -1;
+            // Use size reported by file/http module, if available
+            URLContext *urlc = ffio_geturlcontext(pls->input);
+            if (urlc && urlc->filesize_reported) {
+                seg->size = urlc->filesize;
+            }
         }
-    } else {
-        seg->size = -1;
     }
 
     av_log(pls->parent, AV_LOG_DEBUG, "Segment %s, size %ld, initial download %s\n",

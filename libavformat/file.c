@@ -235,7 +235,20 @@ static int file_open(URLContext *h, const char *filename, int flags)
         return AVERROR(errno);
     c->fd = fd;
 
-    h->is_streamed = !fstat(fd, &st) && S_ISFIFO(st.st_mode);
+    h->is_streamed = 0;
+    h->filesize = 0;
+    h->filesize_reported = 0;
+    if (!fstat(fd, &st))
+    {
+        h->is_streamed = S_ISFIFO(st.st_mode);
+        if (S_ISREG(st.st_mode)) {
+            h->filesize = st.st_size;
+            h->filesize_reported = 1;
+        }
+        else {
+            h->filesize = 0;
+        }
+    }
 
     /* Buffer writes more than the default 32k to improve throughput especially
      * with networked file systems */
