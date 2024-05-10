@@ -1452,7 +1452,7 @@ static int open_input(HLSContext *c, struct playlist *pls, struct segment *seg, 
         }
         else {
             // Use size reported by file/http module, if available
-            URLContext *urlc = ffio_geturlcontext(pls->input);
+            URLContext *urlc = ffio_geturlcontext(*in);
             if (urlc && urlc->filesize_reported) {
                 seg->actual_size = urlc->filesize;
             }
