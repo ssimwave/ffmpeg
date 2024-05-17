@@ -157,6 +157,7 @@ typedef struct DASHContext {
     int use_timeline_segment_offset_correction;
     int fetch_completed_segments_only;
     int use_independent_segment_fetch_for_obtaining_size;
+    int start_on_live_edge;
     // END SSIMWAVE ADDITIONS
 
     int is_live;
@@ -1459,6 +1460,11 @@ static int64_t calc_cur_seg_no(AVFormatContext *s, struct representation *pls)
     int64_t start_time_offset = 0;
 
     if (c->is_live) {
+        if (c->start_on_live_edge) {
+            av_log(s, AV_LOG_TRACE, "starting on live edge (best effort), using max seq no: min[%"PRId64"] max[%"PRId64"]\n",
+                pls->first_seq_no, pls->last_seq_no);
+            return pls->last_seq_no;
+        }
         if (pls->n_fragments) {
             av_log(s, AV_LOG_TRACE, "in n_fragments mode\n");
             num = pls->first_seq_no;
@@ -2102,11 +2108,11 @@ static int open_demux_for_component(AVFormatContext *s, struct representation *p
     int i;
 
     pls->parent = s;
-    pls->cur_seq_no  = calc_cur_seg_no(s, pls);
 
     if (!pls->last_seq_no) {
         pls->last_seq_no = calc_max_seg_no(pls, s->priv_data);
     }
+    pls->cur_seq_no  = calc_cur_seg_no(s, pls);
 
     ret = reopen_demux_for_component(s, pls);
     if (ret < 0) {
@@ -2559,6 +2565,8 @@ static const AVOption dash_options[] = {
         OFFSET(selected_audio_rep_id), AV_OPT_TYPE_STRING, {.str = NULL}, .flags = FLAGS},
     { "use_independent_segment_fetch_for_obtaining_size", "Use patch for obtaining segment size (ie. double download)",
         OFFSET(use_independent_segment_fetch_for_obtaining_size), AV_OPT_TYPE_BOOL, {.i64 = 0}, 0, 1, FLAGS},
+    { "start_on_live_edge", "Start processing at the latest segment for live manifests",
+        OFFSET(start_on_live_edge), AV_OPT_TYPE_BOOL, {.i64 = 0}, 0, 1, FLAGS},
     {NULL}
 };
 
