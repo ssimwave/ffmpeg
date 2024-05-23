@@ -189,6 +189,9 @@ struct playlist {
      * segment.  */
     int64_t reported_segment_number;
     int64_t segment_boundary_position;
+
+    int segment_boundary_set;
+    int packets_in_segment;
 };
 
 /*
@@ -1744,6 +1747,15 @@ reload:
     } else {
         ff_format_io_close(v->parent, &v->input);
     }
+
+    // Set new segment boundary position
+    // Note: using "cur_seg_offset" instead of segment "actual_size" as it matches recorded packet position
+    v->segment_boundary_position += v->cur_seg_offset;
+    v->segment_boundary_set = 1;
+
+    av_log(c, AV_LOG_DEBUG, "Segment %ld Start: playlist %d packets read %d position %ld\n",
+            v->cur_seq_no + 1, v->index, v->packets_in_segment, v->segment_boundary_position);
+
     v->cur_seq_no++;
 
     c->cur_seq_no = v->cur_seq_no;
@@ -2242,8 +2254,9 @@ static int hls_read_header(AVFormatContext *s)
         if (ret < 0)
             return ret;
 
-        pls->segment_boundary_position = pls->segments[0]->actual_size;
-        pls->reported_segment_number = pls->start_seq_no;
+        pls->segment_boundary_set = 0;
+        pls->segment_boundary_position = 0;
+        pls->reported_segment_number = pls->cur_seq_no;
 
         if (pls->id3_deferred_extra && pls->ctx->nb_streams == 1) {
             ff_id3v2_parse_apic(pls->ctx, pls->id3_deferred_extra);
@@ -2518,22 +2531,28 @@ static int hls_read_packet(AVFormatContext *s, AVPacket *pkt)
 
         /* Segment metadata */
         {
-            int cur_seq_no = pls->cur_seq_no;
-            // If the playlist is VOD then let's cap it to the number of segments
-            if (pls->finished) {
-                if (pkt->pos >= pls->segment_boundary_position + pls->init_sec_buf_read_offset) {
-                    if ((pls->reported_segment_number - pls->start_seq_no) + 1 < pls->n_segments) {
-                        pls->reported_segment_number++;
-                        pls->segment_boundary_position += pls->segments[pls->reported_segment_number - pls->start_seq_no]->actual_size;
-                    }
+            // If segment boundary is set, and we have passed it, then update to the latest current segment number
+            if (pls->segment_boundary_set && pkt->pos >= pls->segment_boundary_position + pls->init_sec_buf_read_offset) {
+                pls->segment_boundary_set = 0;
+                pls->packets_in_segment = 0;
+
+                pls->reported_segment_number = pls->cur_seq_no;
+                //pls->reported_segment_number++;
+
+                // If the playlist is VOD then let's cap it to the number of segments
+                if (pls->finished && (pls->reported_segment_number - pls->start_seq_no) >= pls->n_segments) {
+                    pls->reported_segment_number = pls->start_seq_no + pls->n_segments - 1;
                 }
-                cur_seq_no = pls->reported_segment_number;
             }
-            else {
-                pls->reported_segment_number = cur_seq_no;
-            }
-            av_log(c, AV_LOG_DEBUG, "Segment %ld (cur %ld) pkt position %ld next_boundary %ld\n",
-                    pls->reported_segment_number, pls->cur_seq_no, pkt->pos, pls->segment_boundary_position);
+
+            int cur_seq_no = pls->reported_segment_number;
+
+            av_log(c, AV_LOG_DEBUG, "Segment %ld (playlist %d packet %d) key frame %s, pkt position %ld\n",
+                    pls->reported_segment_number, pls->index, pls->packets_in_segment,
+                    (pkt->flags & AV_PKT_FLAG_KEY) ? "true" : "false",
+                    pkt->pos);
+
+            pls->packets_in_segment++;
 
             av_dict_set_int(&metadata_dict, "segNumber", cur_seq_no, 0);
             relative_seq_no = cur_seq_no - pls->start_seq_no;
