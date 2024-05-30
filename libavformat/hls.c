@@ -183,12 +183,10 @@ struct playlist {
     ffurl_read_callback mpegts_parser_input_backup;
     void* mpegts_parser_input_context_backup;
 
-    /*
-     * This is used to accurately report the segment number on a per
-     * packet basis using the current packet position and the size of the
-     * segment.  */
-    int64_t reported_segment_number;
     int64_t segment_boundary_position;
+    int packets_in_segment;
+    int just_opened;
+    int first_segment;
 };
 
 /*
@@ -1578,23 +1576,14 @@ static int playlist_needed(struct playlist *pls)
     return 0;
 }
 
-static int read_data(void *opaque, uint8_t *buf, int buf_size)
+static int open_segment(struct playlist *v)
 {
-    struct playlist *v = opaque;
     HLSContext *c = v->parent->priv_data;
+    AVIOContext *const pb = &v->pb.pub;
     int ret;
-    int just_opened = 0;
     int reload_count = 0;
     struct segment *seg;
 
-    // keep reference of mpegts parser callback mechanism
-    if(v->input && (!c->http_persistent || !v->input_read_done)) {
-        URLContext *urlc = ffio_geturlcontext(v->input);
-        v->mpegts_parser_input_backup = urlc->mpegts_parser_injection;
-        v->mpegts_parser_input_context_backup = urlc->mpegts_parser_injection_context;
-    }
-
-restart:
     if (!v->needed)
         return AVERROR_EOF;
 
@@ -1610,6 +1599,14 @@ restart:
                    v->index, v->url);
             return AVERROR_EOF;
         }
+
+        // Need to reset the sub demuxers and clear EOF flag
+        av_packet_unref(v->pkt);
+        pb->eof_reached = 0;
+        /* Clear any buffered data */
+        pb->buf_end = pb->buf_ptr = pb->buffer;
+        /* Flush the packet queue of the subdemuxer. */
+        ff_read_frame_flush(v->ctx);
 
         /* If this is a live stream and the reload interval has elapsed since
          * the last playlist reload, reload the playlists now. */
@@ -1686,7 +1683,7 @@ reload:
             v->cur_seq_no += 1;
             goto reload;
         }
-        just_opened = 1;
+        v->just_opened = 1;
     }
 
     if (c->http_multiple == -1) {
@@ -1713,6 +1710,43 @@ reload:
         }
     }
 
+    return ret;
+}
+
+static int read_data(void *opaque, uint8_t *buf, int buf_size)
+{
+    struct playlist *v = opaque;
+    HLSContext *c = v->parent->priv_data;
+    int ret;
+    struct segment *seg;
+
+    // keep reference of mpegts parser callback mechanism
+    if(v->input && (!c->http_persistent || !v->input_read_done)) {
+        URLContext *urlc = ffio_geturlcontext(v->input);
+        v->mpegts_parser_input_backup = urlc->mpegts_parser_injection;
+        v->mpegts_parser_input_context_backup = urlc->mpegts_parser_injection_context;
+    }
+
+    if (!v->needed)
+        return AVERROR_EOF;
+
+    // Only opening segment file when we first open HLS headers
+    // Subsequent segment files will be opened explicitly in hls_read_packet(),
+    // only after all packets for the current segment are read
+    if (!v->input || (c->http_persistent && v->input_read_done)) {
+        if (v->first_segment) {
+            ret = open_segment(v);
+            v->first_segment = 0;
+        }
+        else {
+            ret = AVERROR_EOF;
+        }
+
+        if (ret < 0) {
+            return ret;
+        }
+    }
+
     if (v->init_sec_buf_read_offset < v->init_sec_data_len) {
         /* Push init section out first before first actual segment */
         int copy_size = FFMIN(v->init_sec_data_len - v->init_sec_buf_read_offset, buf_size);
@@ -1724,11 +1758,12 @@ reload:
     seg = current_segment(v);
     ret = read_from_url(v, seg, buf, buf_size);
     if (ret > 0) {
-        if (just_opened && v->is_id3_timestamped != 0) {
+        if (v->just_opened && v->is_id3_timestamped != 0) {
             /* Intercept ID3 tags here, elementary audio streams are required
              * to convey timestamps using them in the beginning of each segment. */
             intercept_id3(v, buf, buf_size, &ret);
         }
+        v->just_opened = 0;
 
         // replace mpegts parser callback mechanism
         if (v->input && (!c->http_persistent || !v->input_read_done) && (v->mpegts_parser_input_backup != 0)) {
@@ -1738,17 +1773,25 @@ reload:
         }
         return ret;
     }
+
+    // Finished reading from current segment
     if (c->http_persistent &&
         seg->key_type == KEY_NONE && av_strstart(seg->url, "http", NULL)) {
         v->input_read_done = 1;
     } else {
         ff_format_io_close(v->parent, &v->input);
     }
-    v->cur_seq_no++;
 
-    c->cur_seq_no = v->cur_seq_no;
+    // Set new segment boundary position - only used for logging
+    // Note: using "cur_seg_offset" instead of segment "actual_size" as it matches recorded packet position
+    v->segment_boundary_position += v->cur_seg_offset;
+    av_log(c, AV_LOG_DEBUG, "Segment %ld End: playlist %d packets read %d position %ld\n",
+            v->cur_seq_no, v->index, v->packets_in_segment, v->segment_boundary_position);
 
-    goto restart;
+    // Don't open new segment file now
+    // Return EOF
+    // hls_read_packet() will open the next segment file and increment the cur_seq_no
+    return AVERROR_EOF;
 }
 
 static void add_renditions_to_variant(HLSContext *c, struct variant *var,
@@ -2126,6 +2169,7 @@ static int hls_read_header(AVFormatContext *s)
         pls->index  = i;
         pls->needed = 1;
         pls->parent = s;
+        pls->first_segment = 1;
 
         /*
          * If this is a live stream and this playlist looks like it is one segment
@@ -2242,8 +2286,7 @@ static int hls_read_header(AVFormatContext *s)
         if (ret < 0)
             return ret;
 
-        pls->segment_boundary_position = pls->segments[0]->actual_size;
-        pls->reported_segment_number = pls->start_seq_no;
+        pls->segment_boundary_position = 0;
 
         if (pls->id3_deferred_extra && pls->ctx->nb_streams == 1) {
             ff_id3v2_parse_apic(pls->ctx, pls->id3_deferred_extra);
@@ -2385,6 +2428,7 @@ static int hls_read_packet(AVFormatContext *s, AVPacket *pkt)
     AVDictionary* metadata_dict = NULL;
     uint8_t* metadata_dict_packed = NULL;
     size_t metadata_dict_size = 0;
+    int cur_seq_no;
     int relative_seq_no = 0;
 
     recheck_discard_flags(s, c->first_packet);
@@ -2399,7 +2443,21 @@ static int hls_read_packet(AVFormatContext *s, AVPacket *pkt)
                 int64_t ts_diff;
                 AVRational tb;
                 struct segment *seg = NULL;
+
                 ret = av_read_frame(pls->ctx, pls->pkt);
+
+                // Subsequent segment file is opened and first frame is read,
+                // only after all packets for the current segment are read
+                if (ret == AVERROR_EOF) {
+                    pls->cur_seq_no++;
+                    c->cur_seq_no = pls->cur_seq_no;
+                    pls->packets_in_segment = 0;
+
+                    ret = open_segment(pls);
+                    if (ret == 0) {
+                        ret = av_read_frame(pls->ctx, pls->pkt);
+                    }
+                }
                 if (ret < 0) {
                     if (!avio_feof(&pls->pb.pub) && ret != AVERROR_EOF)
                         return ret;
@@ -2518,23 +2576,14 @@ static int hls_read_packet(AVFormatContext *s, AVPacket *pkt)
 
         /* Segment metadata */
         {
-            int cur_seq_no = pls->cur_seq_no;
-            // If the playlist is VOD then let's cap it to the number of segments
-            if (pls->finished) {
-                if (pkt->pos >= pls->segment_boundary_position + pls->init_sec_buf_read_offset) {
-                    if ((pls->reported_segment_number - pls->start_seq_no) + 1 < pls->n_segments) {
-                        pls->reported_segment_number++;
-                        pls->segment_boundary_position += pls->segments[pls->reported_segment_number - pls->start_seq_no]->actual_size;
-                    }
-                }
-                cur_seq_no = pls->reported_segment_number;
-            }
-            else {
-                pls->reported_segment_number = cur_seq_no;
-            }
-            av_log(c, AV_LOG_DEBUG, "Segment %ld (cur %ld) pkt position %ld next_boundary %ld\n",
-                    pls->reported_segment_number, pls->cur_seq_no, pkt->pos, pls->segment_boundary_position);
+            av_log(c, AV_LOG_DEBUG, "Segment %ld (playlist %d packet %d) key frame %s, pkt position (%ld - %ld)\n",
+                    pls->cur_seq_no, pls->index, pls->packets_in_segment,
+                    (pkt->flags & AV_PKT_FLAG_KEY) ? "true" : "false",
+                    pkt->pos, pkt->pos + pkt->size);
 
+            pls->packets_in_segment++;
+
+            cur_seq_no = pls->cur_seq_no;
             av_dict_set_int(&metadata_dict, "segNumber", cur_seq_no, 0);
             relative_seq_no = cur_seq_no - pls->start_seq_no;
         }
