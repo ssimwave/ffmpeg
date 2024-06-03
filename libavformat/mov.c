@@ -8405,7 +8405,6 @@ static int mov_switch_root(AVFormatContext *s, int64_t target, int index)
         return AVERROR_INVALIDDATA;
     }
 
-    mov->next_root_atom = 0;
     if (index < 0 || index >= mov->frag_index.nb_items)
         index = search_frag_moof_offset(&mov->frag_index, target);
     if (index < mov->frag_index.nb_items &&
@@ -8422,7 +8421,7 @@ static int mov_switch_root(AVFormatContext *s, int64_t target, int index)
     ret = mov_read_default(mov, s->pb, (MOVAtom){ AV_RL32("root"), INT64_MAX });
     if (ret < 0)
         return ret;
-    if (avio_feof(s->pb))
+    if (avio_feof(s->pb) || !mov->found_mdat)
         return AVERROR_EOF;
     av_log(s, AV_LOG_TRACE, "read fragments, offset 0x%"PRIx64"\n", avio_tell(s->pb));
 
