@@ -187,7 +187,9 @@ struct playlist {
     int packets_in_segment;
     int just_opened;
     int first_segment;
-};
+
+    int total_packets;
+ };
 
 /*
  * Renditions are e.g. alternative subtitle or audio streams.
@@ -1649,13 +1651,19 @@ reload:
         if (v->cur_seq_no >= v->start_seq_no + v->n_segments) {
             if (v->finished)
                 return AVERROR_EOF;
+            if (av_gettime_relative() - v->last_load_time < reload_interval) {
+                av_usleep(100*1000);
+            }
+/*
             while (av_gettime_relative() - v->last_load_time < reload_interval) {
                 if (ff_check_interrupt(c->interrupt_callback))
                     return AVERROR_EXIT;
                 av_usleep(100*1000);
             }
+*/            
             /* Enough time has elapsed since the last reload */
             goto reload;
+
         }
 
         v->input_read_done = 0;
@@ -2576,10 +2584,12 @@ static int hls_read_packet(AVFormatContext *s, AVPacket *pkt)
 
         /* Segment metadata */
         {
-            av_log(c, AV_LOG_DEBUG, "Segment %ld (playlist %d packet %d) key frame %s, pkt position (%ld - %ld)\n",
+            pls->total_packets++;
+
+            av_log(c, AV_LOG_DEBUG, "Segment %ld (playlist %d packet %d) key frame %s, pkt position (%ld - %ld), total packets %d\n",
                     pls->cur_seq_no, pls->index, pls->packets_in_segment,
                     (pkt->flags & AV_PKT_FLAG_KEY) ? "true" : "false",
-                    pkt->pos, pkt->pos + pkt->size);
+                    pkt->pos, pkt->pos + pkt->size, pls->total_packets);
 
             pls->packets_in_segment++;
 
