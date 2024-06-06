@@ -1527,9 +1527,12 @@ static int update_init_section(struct playlist *pls, struct segment *seg)
 
 static int64_t default_reload_interval(struct playlist *pls)
 {
+    return 100*1000; // 100 ms
+/*
     return pls->n_segments > 0 ?
                           pls->segments[pls->n_segments - 1]->duration / 2 :
                           pls->target_duration / 2;
+*/    
 }
 
 static int playlist_needed(struct playlist *pls)
@@ -1629,7 +1632,7 @@ reload:
             /* If we need to reload the playlist again below (if
              * there's still no more segments), switch to a reload
              * interval of half the target duration. */
-            reload_interval = v->target_duration / 2;
+            //reload_interval = v->target_duration / 2;
         }
         if (v->cur_seq_no < v->start_seq_no) {
             av_log(v->parent, AV_LOG_WARNING,
@@ -1651,8 +1654,9 @@ reload:
         if (v->cur_seq_no >= v->start_seq_no + v->n_segments) {
             if (v->finished)
                 return AVERROR_EOF;
-            if (av_gettime_relative() - v->last_load_time < reload_interval) {
-                av_usleep(100*1000);
+            int64_t delay = reload_interval - (av_gettime_relative() - v->last_load_time);
+            if (delay > 0) {
+                av_usleep(delay);
             }
 /*
             while (av_gettime_relative() - v->last_load_time < reload_interval) {
