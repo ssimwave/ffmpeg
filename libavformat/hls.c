@@ -1638,8 +1638,8 @@ reload:
 #if 1
             /* If we need to reload the playlist again below (if
              * there's still no more segments), switch to a reload
-             * interval of 100 ms. */
-            reload_interval = 100*1000;
+             * interval of 15 ms. */
+            reload_interval = 15*1000;
 #else
             /* If we need to reload the playlist again below (if
              * there's still no more segments), switch to a reload
@@ -1672,8 +1672,8 @@ reload:
             if (ff_check_interrupt(c->interrupt_callback))
                 return AVERROR_EXIT;
 
-            // If we are out of segments, sleep 100ms between playlist reload retries
-            reload_interval = 100*1000;
+            // If we are out of segments, attempt first reload immediately, sleep 15ms between retries thereafter
+            reload_interval = (reload_count == 1) ? 0 : 15*1000;
             av_usleep(reload_interval);
             playlist_sleep_delay += reload_interval;
 #else
