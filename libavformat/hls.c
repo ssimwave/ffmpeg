@@ -187,7 +187,11 @@ struct playlist {
     int packets_in_segment;
     int just_opened;
     int first_segment;
-};
+
+    int total_packets;
+
+    int playlist_reload_delay;
+ };
 
 /*
  * Renditions are e.g. alternative subtitle or audio streams.
@@ -1589,6 +1593,8 @@ static int open_segment(struct playlist *v)
 
     if (!v->input || (c->http_persistent && v->input_read_done)) {
         int64_t reload_interval;
+        int64_t playlist_sleep_delay = 0;
+        int64_t playlist_reload_start = 0;
 
         /* Check that the playlist is still needed before opening a new
          * segment. */
@@ -1618,16 +1624,28 @@ reload:
             return AVERROR_EOF;
         if (!v->finished &&
             av_gettime_relative() - v->last_load_time >= reload_interval) {
+
+            if (!playlist_reload_start) {
+                playlist_reload_start = av_gettime_relative();
+            }
+
             if ((ret = parse_playlist(c, v->url, v, NULL)) < 0) {
                 if (ret != AVERROR_EXIT)
                     av_log(v->parent, AV_LOG_WARNING, "Failed to reload playlist %d\n",
                            v->index);
                 return ret;
             }
+#if 1
+            /* If we need to reload the playlist again below (if
+             * there's still no more segments), switch to a reload
+             * interval of 100 ms. */
+            reload_interval = 100*1000;
+#else
             /* If we need to reload the playlist again below (if
              * there's still no more segments), switch to a reload
              * interval of half the target duration. */
             reload_interval = v->target_duration / 2;
+#endif            
         }
         if (v->cur_seq_no < v->start_seq_no) {
             av_log(v->parent, AV_LOG_WARNING,
@@ -1649,13 +1667,32 @@ reload:
         if (v->cur_seq_no >= v->start_seq_no + v->n_segments) {
             if (v->finished)
                 return AVERROR_EOF;
+
+#if 1
+            if (ff_check_interrupt(c->interrupt_callback))
+                return AVERROR_EXIT;
+
+            // If we are out of segments, sleep 100ms between playlist reload retries
+            reload_interval = 100*1000;
+            av_usleep(reload_interval);
+            playlist_sleep_delay += reload_interval;
+#else
             while (av_gettime_relative() - v->last_load_time < reload_interval) {
                 if (ff_check_interrupt(c->interrupt_callback))
                     return AVERROR_EXIT;
                 av_usleep(100*1000);
             }
+#endif
+
             /* Enough time has elapsed since the last reload */
             goto reload;
+
+        }
+
+        if (playlist_reload_start > 0) {
+            v->playlist_reload_delay = av_gettime_relative() - playlist_reload_start;
+            av_log(v->parent, AV_LOG_DEBUG, "Playlist %d total reload delay %d, sleep %ld\n",
+                    v->index, v->playlist_reload_delay, playlist_sleep_delay);
         }
 
         v->input_read_done = 0;
@@ -2444,6 +2481,8 @@ static int hls_read_packet(AVFormatContext *s, AVPacket *pkt)
                 AVRational tb;
                 struct segment *seg = NULL;
 
+                pls->playlist_reload_delay = 0;
+
                 ret = av_read_frame(pls->ctx, pls->pkt);
 
                 // Subsequent segment file is opened and first frame is read,
@@ -2569,6 +2608,7 @@ static int hls_read_packet(AVFormatContext *s, AVPacket *pkt)
         /* Playlist metadata */
         av_dict_set_int(&metadata_dict, "targetDuration", pls->target_duration, 0);
         av_dict_set_int(&metadata_dict, "playlistType", pls->type, 0);
+        av_dict_set_int(&metadata_dict, "reloadDelay", pls->playlist_reload_delay, 0);
         av_dict_set_int(&metadata_dict, "variants", c->n_variants, 0);
         if (pls->index < c->n_variants) {
             av_dict_set_int(&metadata_dict, "bandwidth", c->variants[pls->index]->bandwidth, 0);
@@ -2576,10 +2616,12 @@ static int hls_read_packet(AVFormatContext *s, AVPacket *pkt)
 
         /* Segment metadata */
         {
-            av_log(c, AV_LOG_DEBUG, "Segment %ld (playlist %d packet %d) key frame %s, pkt position (%ld - %ld)\n",
+            pls->total_packets++;
+
+            av_log(c, AV_LOG_DEBUG, "Segment %ld (playlist %d packet %d) key frame %s, pkt position (%ld - %ld), total packets %d\n",
                     pls->cur_seq_no, pls->index, pls->packets_in_segment,
                     (pkt->flags & AV_PKT_FLAG_KEY) ? "true" : "false",
-                    pkt->pos, pkt->pos + pkt->size);
+                    pkt->pos, pkt->pos + pkt->size, pls->total_packets);
 
             pls->packets_in_segment++;
 
