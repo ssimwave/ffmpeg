@@ -240,6 +240,7 @@ typedef struct HLSContext {
     AVDictionary *seg_format_opts;
     char *allowed_extensions;
     int max_reload;
+    int reload_retry_interval;
     int http_persistent;
     int http_multiple;
     int http_seekable;
@@ -1624,10 +1625,11 @@ reload:
                            v->index);
                 return ret;
             }
-            /* If we need to reload the playlist again below (if
-             * there's still no more segments), switch to a reload
-             * interval of half the target duration. */
-            reload_interval = v->target_duration / 2;
+            /* If we need to reload the playlist again below (if there's still no more segments),
+             * switch to configured reload retry interval.
+             * If reload retry interval is not set, default to target duration / 2 */
+            reload_interval = (c->reload_retry_interval == -1) ?
+                (v->target_duration / 2) : (c->reload_retry_interval * 1000);
         }
         if (v->cur_seq_no < v->start_seq_no) {
             av_log(v->parent, AV_LOG_WARNING,
@@ -1649,11 +1651,23 @@ reload:
         if (v->cur_seq_no >= v->start_seq_no + v->n_segments) {
             if (v->finished)
                 return AVERROR_EOF;
+
             while (av_gettime_relative() - v->last_load_time < reload_interval) {
                 if (ff_check_interrupt(c->interrupt_callback))
                     return AVERROR_EXIT;
-                av_usleep(100*1000);
+                if (c->reload_retry_interval == -1) {
+                    av_usleep(100*1000);
+                }
+                else {
+                    // If we are out of segments, attempt first reload immediately,
+                    // sleep configured reload interval between retries thereafter
+                    reload_interval = (reload_count == 1) ? 0 : c->reload_retry_interval * 1000;
+                    if (reload_interval > 0) {
+                        av_usleep(reload_interval);
+                    }
+                }
             }
+
             /* Enough time has elapsed since the last reload */
             goto reload;
         }
@@ -2730,6 +2744,8 @@ static const AVOption hls_options[] = {
         INT_MIN, INT_MAX, FLAGS},
     {"max_reload", "Maximum number of times a insufficient list is attempted to be reloaded",
         OFFSET(max_reload), AV_OPT_TYPE_INT, {.i64 = 1000}, 0, INT_MAX, FLAGS},
+    {"reload_retry_interval", "Interval in ms to wait before retrying playlist reload. If not set, defaults to target duration/2",
+        OFFSET(reload_retry_interval), AV_OPT_TYPE_INT, {.i64 = -1}, 0, INT_MAX, FLAGS},
     {"m3u8_hold_counters", "The maximum number of times to load m3u8 when it refreshes without new segments",
         OFFSET(m3u8_hold_counters), AV_OPT_TYPE_INT, {.i64 = 1000}, 0, INT_MAX, FLAGS},
     {"http_persistent", "Use persistent HTTP connections",
