@@ -97,7 +97,6 @@ struct representation {
     int64_t first_seq_no;
     int64_t last_seq_no;
     int64_t start_number; /* used in case when we have dynamic list of segment to know which segments are new one*/
-    int found_start_number;
 
     int64_t fragment_duration;
     int64_t fragment_timescale;
@@ -124,6 +123,7 @@ struct representation {
 
     ffurl_read_callback mpegts_parser_input_backup;
     void* mpegts_parser_input_context_backup;
+    int found_start_number;
 };
 
 typedef struct DASHContext {
@@ -159,6 +159,8 @@ typedef struct DASHContext {
     int fetch_completed_segments_only;
     int use_independent_segment_fetch_for_obtaining_size;
     int start_on_live_edge;
+    int max_reload;
+    int reload_retry_interval;
     // END SSIMWAVE ADDITIONS
 
     int is_live;
@@ -280,7 +282,7 @@ static int64_t get_segment_start_time_based_on_timeline(const DASHContext *c, st
 
         for (i = 0; i < pls->n_timelines; i++) {
             if (pls->timelines[i]->starttime > 0) {
-                start_time = pls->timelines[i]->starttime; 
+                start_time = pls->timelines[i]->starttime;
             }
             if (num == cur_seq_no)
                 goto finish;
@@ -1532,7 +1534,7 @@ static int64_t calc_max_seg_no(struct representation *pls, DASHContext *c)
         int i = 0;
         num = pls->first_seq_no + pls->n_timelines - 1;
         for (i = 0; i < pls->n_timelines; i++) {
-            if (pls->timelines[i]->repeat == -1) { 
+            if (pls->timelines[i]->repeat == -1) {
                 int length_of_each_segment = pls->timelines[i]->duration / pls->fragment_timescale;
                 num =  c->period_duration / length_of_each_segment;
             } else {
@@ -1587,7 +1589,7 @@ static void move_segments(struct representation *rep_src, struct representation 
 
 static void fix_start_number(DASHContext* c, struct representation** old_reps, struct representation** new_reps, int n_reps, const char* label) {
     if (!c->use_timeline_segment_offset_correction) {
-        return
+        return;
     }
 
     for (int i = 0; i < n_reps; i++) {
@@ -1606,15 +1608,23 @@ static void fix_start_number(DASHContext* c, struct representation** old_reps, s
             // previous version of the representations start_number.
             int64_t last_end_time = get_segment_start_time_based_on_timeline(c, last_rep, last_rep->last_seq_no) / last_rep->fragment_timescale;
             int64_t last_seq_no = calc_next_seg_no_from_timelines(c, new_rep, last_end_time * new_rep->fragment_timescale - 1);
-            // TODO: calc_next_seg_no_from_timelines  returns -1 if the sequences isn't in the playlist... I think we need to die?
+            if (last_seq_no < 0) {
+                // Previous edge sequence is outside of the current playlist... which means that an entire timeShiftBufferDepth worth
+                // of time (or more) has passed and every segment in the playlist is new... we should be ok just restarting numbering
+                // (ie. don't do anything)
+                av_log(c, AV_LOG_WARNING, "Previous edge segment not found in manifest, discontinuity suspected. Segment numbers may be reset.\n");
+                continue;
+            }
             int64_t new_last_seq_no = calc_max_seg_no(new_rep, c);
             av_log(c, AV_LOG_DEBUG, "Checking if %s start_number needes fixing, last_end_time: [%"PRId64"] last_seq_no: [%"PRId64"], new_last_seq_no: [%"PRId64"], last_start_number: [%"PRId64"], new_start_number: [%"PRId64"]\n",
                    label, last_end_time, last_seq_no, new_last_seq_no, last_rep->start_number, new_rep->start_number);
             int64_t startNumber = last_rep->start_number + (new_last_seq_no - last_seq_no);
-            // Update start/first_seq_no (last_seq_no will be recalculated in move_timelines/move_segments)
-            av_log(c, AV_LOG_DEBUG, "Fixing %s timeline. start_number: [%"PRId64"] first_seq_no: [%"PRId64"], new: [%"PRId64"]\n",
-                    label, new_rep->start_number, new_rep->first_seq_no, startNumber);
-            new_rep->start_number = new_rep->first_seq_no = startNumber;
+            if (new_rep->start_number != startNumber) {
+                // Update start/first_seq_no (last_seq_no will be recalculated in move_timelines/move_segments)
+                av_log(c, AV_LOG_DEBUG, "Fixing %s timeline. start_number: [%"PRId64"] first_seq_no: [%"PRId64"], new: [%"PRId64"]\n",
+                        label, new_rep->start_number, new_rep->first_seq_no, startNumber);
+                new_rep->start_number = new_rep->first_seq_no = startNumber;
+            }
         }
     }
 }
@@ -1772,6 +1782,7 @@ static int get_current_fragment(struct representation *pls, struct fragment** ne
         min_seq_no = calc_min_seg_no(pls->parent, pls);
         max_seq_no = calc_max_seg_no(pls, c);
         old_max_seq_no = max_seq_no;
+
         if (pls->timelines || pls->fragments) {
             err = refresh_manifest(pls->parent);
             if (AVERROR_INPUT_CHANGED == err) {
@@ -1971,9 +1982,32 @@ static int64_t seek_data(void *opaque, int64_t offset, int whence)
     return AVERROR(ENOSYS);
 }
 
+static void delay_reload(DASHContext *c, int reload_count)
+{
+    int delay = 0;
+
+    // Attempt first reload immediately,
+    if (reload_count == 1)
+    {
+        delay = 0;
+    }
+    else if (c->reload_retry_interval < 0)
+    {
+        delay = c->minimum_update_period * 1000 * 1000 / 2;
+    }
+    else {
+        delay = c->reload_retry_interval * 1000;
+    }
+    if (delay > 0) {
+        av_log(c, AV_LOG_DEBUG, "Segment not ready, retrying again in: [%"PRId64"]ms\n", delay/1000);
+        av_usleep(delay);
+    }
+}
+
 static int read_data(void *opaque, uint8_t *buf, int buf_size)
 {
     int ret = 0;
+    int reload_count = 0;
     struct representation *v = opaque;
     DASHContext *c = v->parent->priv_data;
 
@@ -1991,11 +2025,13 @@ static int read_data(void *opaque, uint8_t *buf, int buf_size)
 restart:
     if (!v->input) {
         free_fragment(&v->cur_seg);
+        reload_count++;
+        if (reload_count > c->max_reload)
+            return AVERROR_EOF;
         ret = get_current_fragment(v, &v->cur_seg);
-        if (ret == AVERROR(EAGAIN)) {
+        if (ret == AVERROR(EAGAIN) && c->is_live) {
             // Fragment not ready yet, sleep and try again
-            // TODO: better retry logic, timeout after X time, etc
-            av_usleep(100*1000);
+            delay_reload(c, reload_count);
             goto restart;
         }
         else if (0 != ret) {
@@ -2040,11 +2076,13 @@ restart:
 
     /* check the v->cur_seg, if it is null, get current and double check if the new v->cur_seg*/
     if (!v->cur_seg) {
+        reload_count++;
+        if (reload_count > c->max_reload)
+            return AVERROR_EOF;
         ret = get_current_fragment(v, &v->cur_seg);
-        if (ret == AVERROR(EAGAIN)) {
+        if (ret == AVERROR(EAGAIN) && c->is_live) {
             // Fragment not ready yet, sleep and try again
-            // TODO: better retry logic, timeout after X time, etc
-            av_usleep(100*1000);
+            delay_reload(c, reload_count);
             goto restart;
         }
         else if (0 != ret) {
@@ -2073,7 +2111,6 @@ end:
         urlc->mpegts_parser_injection = v->mpegts_parser_input_backup;
         urlc->mpegts_parser_injection_context = v->mpegts_parser_input_context_backup;
     }
-
     return ret;
 }
 
@@ -2633,6 +2670,10 @@ static const AVOption dash_options[] = {
         OFFSET(use_independent_segment_fetch_for_obtaining_size), AV_OPT_TYPE_BOOL, {.i64 = 0}, 0, 1, FLAGS},
     { "start_on_live_edge", "Start processing at the latest segment for live manifests",
         OFFSET(start_on_live_edge), AV_OPT_TYPE_BOOL, {.i64 = 0}, 0, 1, FLAGS},
+    {"max_reload", "Maximum number of times a list is attempted to be reloaded during live (dynamic) playback",
+        OFFSET(max_reload), AV_OPT_TYPE_INT, {.i64 = 1000}, 0, INT_MAX, FLAGS},
+    {"reload_retry_interval", "Interval in ms to wait before retrying playlist reload. If not set, defaults to mimumumUpdatePeriod/2",
+        OFFSET(reload_retry_interval), AV_OPT_TYPE_INT, {.i64 = -1}, 0, INT_MAX, FLAGS},
     {NULL}
 };
 
