@@ -97,6 +97,7 @@ struct representation {
     int64_t first_seq_no;
     int64_t last_seq_no;
     int64_t start_number; /* used in case when we have dynamic list of segment to know which segments are new one*/
+    int found_start_number;
 
     int64_t fragment_duration;
     int64_t fragment_timescale;
@@ -998,6 +999,7 @@ static int parse_manifest_representation(AVFormatContext *s, const char *url,
         val = get_val_from_nodes_tab(fragment_templates_tab, 4, "startNumber");
         if (val) {
             rep->start_number = rep->first_seq_no = (int64_t) strtoll(val, NULL, 10);
+            rep->found_start_number = 1;
             av_log(s, AV_LOG_TRACE, "rep->first_seq_no = [%"PRId64"]\n", rep->first_seq_no);
             xmlFree(val);
         }
@@ -1067,6 +1069,7 @@ static int parse_manifest_representation(AVFormatContext *s, const char *url,
         val = get_val_from_nodes_tab(segmentlists_tab, 3, "startNumber");
         if (val) {
             rep->start_number = rep->first_seq_no = (int64_t) strtoll(val, NULL, 10);
+            rep->found_start_number = 1;
             av_log(s, AV_LOG_TRACE, "rep->first_seq_no = [%"PRId64"]\n", rep->first_seq_no);
             xmlFree(val);
         }
@@ -1554,6 +1557,7 @@ static void move_timelines(struct representation *rep_src, struct representation
         free_timelines_list(rep_dest);
         rep_dest->timelines    = rep_src->timelines;
         rep_dest->n_timelines  = rep_src->n_timelines;
+        rep_dest->start_number = rep_src->start_number;
         rep_dest->first_seq_no = rep_src->first_seq_no;
         rep_dest->last_seq_no = calc_max_seg_no(rep_dest, c);
         rep_src->timelines = NULL;
@@ -1581,6 +1585,55 @@ static void move_segments(struct representation *rep_src, struct representation 
     }
 }
 
+static void fix_start_number(DASHContext* c, struct representation** old_reps, struct representation** new_reps, int n_reps, const char* label) {
+    for (int i = 0; i < n_reps; i++) {
+        struct representation *last_rep = old_reps[i];
+        struct representation *new_rep = new_reps[i];
+        if (!new_rep->found_start_number && new_rep->timelines && new_rep->n_timelines > 0) {
+            if (last_rep->last_seq_no == 0) {
+                // First load/refresh. Wait till we've properly detected a segment. We only want to fixup representations after the first
+                // load.
+                continue;
+            }
+            // The representation is using timeline mode - and has no start number hint. So try to guess the start 
+            // number by finding where the last segment in the previous version of the representation is in the current
+            // representation version. We can use this to find the number of segments which have been dropped since the
+            // representation was updated. We can then infer the new start_number based on this information, and the
+            // previous version of the representations start_number.
+            int64_t last_end_time = get_segment_start_time_based_on_timeline(c, last_rep, last_rep->last_seq_no) / last_rep->fragment_timescale;
+            int64_t last_seq_no = calc_next_seg_no_from_timelines(c, new_rep, last_end_time * new_rep->fragment_timescale - 1);
+            // TODO: calc_next_seg_no_from_timelines  returns -1 if the sequences isn't in the playlist... I think we need to die?
+            int64_t new_last_seq_no = calc_max_seg_no(new_rep, c);
+            av_log(c, AV_LOG_VERBOSE, "Checking if %s start_number needes fixing, last_end_time: [%"PRId64"] last_seq_no: [%"PRId64"], new_last_seq_no: [%"PRId64"], last_start_number: [%"PRId64"], new_start_number: [%"PRId64"]\n",
+                   label, last_end_time, last_seq_no, new_last_seq_no, last_rep->start_number, new_rep->start_number);
+            int64_t startNumber = last_rep->start_number + (new_last_seq_no - last_seq_no);
+            // Update start/first_seq_no (last_seq_no will be recalculated in move_timelines/move_segments)
+            av_log(c, AV_LOG_VERBOSE, "Fixing %s timeline. start_number: [%"PRId64"] first_seq_no: [%"PRId64"], new: [%"PRId64"]\n",
+                    label, new_rep->start_number, new_rep->first_seq_no, startNumber);
+            new_rep->start_number = new_rep->first_seq_no = startNumber;
+        }
+    }
+}
+
+static void fix_start_number2(DASHContext* c, struct representation** old_reps, struct representation** new_reps, int n_reps, const char* label) {
+    for (int i = 0; i < n_reps; i++) {
+        struct representation *last_rep = old_reps[i];
+        struct representation *new_rep = new_reps[i];
+        if (!new_rep->found_start_number && new_rep->timelines && new_rep->n_timelines > 0) {
+            // The representation is using timeline mode - and has no start number hint. So try to guess the start 
+            // number by finding where the last segment in the previous version of the representation is in the current
+            // representation version. We can use this to find the number of segments which have been dropped since the
+            // representation was updated. We can then infer the new start_number based on this information, and the
+            // previous version of the representations start_number.
+            int64_t last_end_time = get_segment_start_time_based_on_timeline(c, last_rep, last_rep->last_seq_no) / last_rep->fragment_timescale;
+            int64_t last_seq_no = calc_next_seg_no_from_timelines(c, new_rep, last_end_time * new_rep->fragment_timescale - 1);
+            int64_t new_last_seq_no = calc_max_seg_no(new_rep, c);
+            int64_t startNumber = last_rep->start_number + (new_last_seq_no - last_seq_no);
+            // Update start/first_seq_no (last_seq_no will be recalculated in move_timelines/move_segments)
+            new_rep->start_number = new_rep->first_seq_no = startNumber;
+        }
+    }
+}
 
 static int refresh_manifest(AVFormatContext *s)
 {
@@ -1625,6 +1678,14 @@ static int refresh_manifest(AVFormatContext *s)
                n_subtitles, c->n_subtitles);
         return AVERROR_INVALIDDATA;
     }
+
+    /* Some encoders will NOT include a startNumber in the segment timeline, startNumber IS optional in the spec, but the rest of the code
+     * uses the start number (and first_seq_no and last_seq_no) to perform segment selection when in timeline mode. So in the case where the playlist
+     * is in timeline mode, and start_number is NOT set, we need to fix-up the start_number/first_seq_no/last_seq_no based on the segment times instead. */
+    fix_start_number(c, videos, c->videos, n_videos, "video");
+    fix_start_number2(c, audios, c->audios, n_audios, "audio");
+    fix_start_number2(c, subtitles, c->subtitles, n_subtitles, "subtitles");
+
     /* It is possible for the demuxer to be processing at the live edge and waiting for a segment in the future.
      * When that happens 'cur_seq_no' can be past the end of the timelines indicated by the MPD.
      * The functions below that attempt to calculate the next segment number based on the timeline data will end up
@@ -1693,6 +1754,7 @@ static int get_current_fragment(struct representation *pls, struct fragment** ne
     int err = 0;
     int64_t min_seq_no = 0;
     int64_t max_seq_no = 0;
+    int64_t old_max_seq_no = 0;
     struct fragment *seg = NULL;
     struct fragment *seg_ptr = NULL;
     DASHContext *c = pls->parent->priv_data;
@@ -1725,18 +1787,26 @@ static int get_current_fragment(struct representation *pls, struct fragment** ne
     if (c->is_live) {
         min_seq_no = calc_min_seg_no(pls->parent, pls);
         max_seq_no = calc_max_seg_no(pls, c);
-
+        old_max_seq_no = max_seq_no;
         if (pls->timelines || pls->fragments) {
             err = refresh_manifest(pls->parent);
             if (AVERROR_INPUT_CHANGED == err) {
                 return err;
             }
+            min_seq_no = calc_min_seg_no(pls->parent, pls);
+            max_seq_no = calc_max_seg_no(pls, c);
         }
         if (pls->cur_seq_no < min_seq_no) {
-            av_log(pls->parent, AV_LOG_VERBOSE, "old fragment: cur[%"PRId64"] min[%"PRId64"] max[%"PRId64"]\n", (int64_t)pls->cur_seq_no, min_seq_no, max_seq_no);
+            av_log(pls->parent, AV_LOG_VERBOSE, "old fragment: cur[%"PRId64"] min[%"PRId64"] max[%"PRId64"]\n",
+                   (int64_t)pls->cur_seq_no, min_seq_no, max_seq_no);
             pls->cur_seq_no = calc_cur_seg_no(pls->parent, pls);
-        } else if (pls->cur_seq_no > max_seq_no) {
-            av_log(pls->parent, AV_LOG_VERBOSE, "new fragment: min[%"PRId64"] max[%"PRId64"]\n", min_seq_no, max_seq_no);
+        } else if (pls->cur_seq_no > old_max_seq_no) {
+            av_log(pls->parent, AV_LOG_VERBOSE, "new fragment: cur[%"PRId64"] min[%"PRId64"] max[%"PRId64"] (prev_max[%"PRId64"])\n",
+                   (int64_t)pls->cur_seq_no, min_seq_no, max_seq_no, old_max_seq_no);
+            if (pls->cur_seq_no > max_seq_no) {
+                av_log(pls->parent, AV_LOG_VERBOSE, "new fragment outside playlist availability");
+                return AVERROR(EAGAIN);
+            }
         }
         seg = av_mallocz(sizeof(struct fragment));
         if (!seg) {
@@ -1753,12 +1823,12 @@ static int get_current_fragment(struct representation *pls, struct fragment** ne
         if (!pls->url_template) {
             av_log(pls->parent, AV_LOG_ERROR, "Cannot get fragment, missing template URL\n");
             av_free(seg);
-            return NULL;
+            return 0;
         }
         tmpfilename = av_mallocz(c->max_url_size);
         if (!tmpfilename) {
             av_free(seg);
-            return NULL;
+            return 0;
         }
         ff_dash_fill_tmpl_params(tmpfilename, c->max_url_size, pls->url_template, 0, pls->cur_seq_no, 0, get_segment_start_time_based_on_timeline(c, pls, pls->cur_seq_no));
         seg->url = av_strireplace(pls->url_template, pls->url_template, tmpfilename);
@@ -1769,7 +1839,7 @@ static int get_current_fragment(struct representation *pls, struct fragment** ne
                 av_log(pls->parent, AV_LOG_ERROR, "Cannot resolve template url '%s'\n", pls->url_template);
                 av_free(tmpfilename);
                 av_free(seg);
-                return NULL;
+                return 0;
             }
         }
         av_free(tmpfilename);
@@ -1938,7 +2008,13 @@ restart:
     if (!v->input) {
         free_fragment(&v->cur_seg);
         ret = get_current_fragment(v, &v->cur_seg);
-        if (0 != ret) {
+        if (ret == AVERROR(EAGAIN)) {
+            // Fragment not ready yet, sleep and try again
+            // TODO: better retry logic, timeout after X time, etc
+            av_usleep(100*1000);
+            goto restart;
+        }
+        else if (0 != ret) {
             goto end;
         }
         if (!v->cur_seg) {
@@ -1981,7 +2057,13 @@ restart:
     /* check the v->cur_seg, if it is null, get current and double check if the new v->cur_seg*/
     if (!v->cur_seg) {
         ret = get_current_fragment(v, &v->cur_seg);
-        if (0 != ret) {
+        if (ret == AVERROR(EAGAIN)) {
+            // Fragment not ready yet, sleep and try again
+            // TODO: better retry logic, timeout after X time, etc
+            av_usleep(100*1000);
+            goto restart;
+        }
+        else if (0 != ret) {
             goto end;
         }
         if (!v->cur_seg) {
