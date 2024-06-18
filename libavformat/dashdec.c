@@ -280,7 +280,7 @@ static int64_t get_segment_start_time_based_on_timeline(const DASHContext *c, st
 
         for (i = 0; i < pls->n_timelines; i++) {
             if (pls->timelines[i]->starttime > 0) {
-                start_time = pls->timelines[i]->starttime;
+                start_time = pls->timelines[i]->starttime; 
             }
             if (num == cur_seq_no)
                 goto finish;
@@ -1532,7 +1532,7 @@ static int64_t calc_max_seg_no(struct representation *pls, DASHContext *c)
         int i = 0;
         num = pls->first_seq_no + pls->n_timelines - 1;
         for (i = 0; i < pls->n_timelines; i++) {
-            if (pls->timelines[i]->repeat == -1) {
+            if (pls->timelines[i]->repeat == -1) { 
                 int length_of_each_segment = pls->timelines[i]->duration / pls->fragment_timescale;
                 num =  c->period_duration / length_of_each_segment;
             } else {
@@ -1586,6 +1586,10 @@ static void move_segments(struct representation *rep_src, struct representation 
 }
 
 static void fix_start_number(DASHContext* c, struct representation** old_reps, struct representation** new_reps, int n_reps, const char* label) {
+    if (!c->use_timeline_segment_offset_correction) {
+        return
+    }
+
     for (int i = 0; i < n_reps; i++) {
         struct representation *last_rep = old_reps[i];
         struct representation *new_rep = new_reps[i];
@@ -1604,32 +1608,12 @@ static void fix_start_number(DASHContext* c, struct representation** old_reps, s
             int64_t last_seq_no = calc_next_seg_no_from_timelines(c, new_rep, last_end_time * new_rep->fragment_timescale - 1);
             // TODO: calc_next_seg_no_from_timelines  returns -1 if the sequences isn't in the playlist... I think we need to die?
             int64_t new_last_seq_no = calc_max_seg_no(new_rep, c);
-            av_log(c, AV_LOG_VERBOSE, "Checking if %s start_number needes fixing, last_end_time: [%"PRId64"] last_seq_no: [%"PRId64"], new_last_seq_no: [%"PRId64"], last_start_number: [%"PRId64"], new_start_number: [%"PRId64"]\n",
+            av_log(c, AV_LOG_DEBUG, "Checking if %s start_number needes fixing, last_end_time: [%"PRId64"] last_seq_no: [%"PRId64"], new_last_seq_no: [%"PRId64"], last_start_number: [%"PRId64"], new_start_number: [%"PRId64"]\n",
                    label, last_end_time, last_seq_no, new_last_seq_no, last_rep->start_number, new_rep->start_number);
             int64_t startNumber = last_rep->start_number + (new_last_seq_no - last_seq_no);
             // Update start/first_seq_no (last_seq_no will be recalculated in move_timelines/move_segments)
-            av_log(c, AV_LOG_VERBOSE, "Fixing %s timeline. start_number: [%"PRId64"] first_seq_no: [%"PRId64"], new: [%"PRId64"]\n",
+            av_log(c, AV_LOG_DEBUG, "Fixing %s timeline. start_number: [%"PRId64"] first_seq_no: [%"PRId64"], new: [%"PRId64"]\n",
                     label, new_rep->start_number, new_rep->first_seq_no, startNumber);
-            new_rep->start_number = new_rep->first_seq_no = startNumber;
-        }
-    }
-}
-
-static void fix_start_number2(DASHContext* c, struct representation** old_reps, struct representation** new_reps, int n_reps, const char* label) {
-    for (int i = 0; i < n_reps; i++) {
-        struct representation *last_rep = old_reps[i];
-        struct representation *new_rep = new_reps[i];
-        if (!new_rep->found_start_number && new_rep->timelines && new_rep->n_timelines > 0) {
-            // The representation is using timeline mode - and has no start number hint. So try to guess the start 
-            // number by finding where the last segment in the previous version of the representation is in the current
-            // representation version. We can use this to find the number of segments which have been dropped since the
-            // representation was updated. We can then infer the new start_number based on this information, and the
-            // previous version of the representations start_number.
-            int64_t last_end_time = get_segment_start_time_based_on_timeline(c, last_rep, last_rep->last_seq_no) / last_rep->fragment_timescale;
-            int64_t last_seq_no = calc_next_seg_no_from_timelines(c, new_rep, last_end_time * new_rep->fragment_timescale - 1);
-            int64_t new_last_seq_no = calc_max_seg_no(new_rep, c);
-            int64_t startNumber = last_rep->start_number + (new_last_seq_no - last_seq_no);
-            // Update start/first_seq_no (last_seq_no will be recalculated in move_timelines/move_segments)
             new_rep->start_number = new_rep->first_seq_no = startNumber;
         }
     }
@@ -1683,8 +1667,8 @@ static int refresh_manifest(AVFormatContext *s)
      * uses the start number (and first_seq_no and last_seq_no) to perform segment selection when in timeline mode. So in the case where the playlist
      * is in timeline mode, and start_number is NOT set, we need to fix-up the start_number/first_seq_no/last_seq_no based on the segment times instead. */
     fix_start_number(c, videos, c->videos, n_videos, "video");
-    fix_start_number2(c, audios, c->audios, n_audios, "audio");
-    fix_start_number2(c, subtitles, c->subtitles, n_subtitles, "subtitles");
+    fix_start_number(c, audios, c->audios, n_audios, "audio");
+    fix_start_number(c, subtitles, c->subtitles, n_subtitles, "subtitles");
 
     /* It is possible for the demuxer to be processing at the live edge and waiting for a segment in the future.
      * When that happens 'cur_seq_no' can be past the end of the timelines indicated by the MPD.
