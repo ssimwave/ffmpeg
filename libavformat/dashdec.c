@@ -1599,7 +1599,7 @@ static int64_t guess_start_number(DASHContext* c, struct representation* rep) {
         }
         if (duration) {
             startNumber = ((get_current_time_in_sec() - c->availability_start_time) * rep->fragment_timescale)/ (duration);
-            av_log(c, AV_LOG_DEBUG, "Guessing start_number from timeline: [%"PRId64"]", startNumber);
+            av_log(c, AV_LOG_DEBUG, "Guessing start_number from timeline: [%"PRId64"]\n", startNumber);
         }
     }
     return startNumber;
@@ -1619,6 +1619,11 @@ static void fix_start_number(DASHContext* c, struct representation** old_reps, s
         struct representation *last_rep = old_reps[i];
         struct representation *new_rep = new_reps[i];
         if (!new_rep->found_start_number && new_rep->timelines && new_rep->n_timelines > 0) {
+            if (!last_rep->last_seq_no) {
+                // We haven't called open_demux_for_component on this representation yet, skip for now. 
+                continue;
+            }
+
             // The representation is using timeline mode - and has no start number hint. So try to guess the start 
             // number by finding where the last segment in the previous version of the representation is in the current
             // representation version. We can use this to find the number of segments which have been dropped since the
@@ -2230,7 +2235,7 @@ static int open_demux_for_component(AVFormatContext *s, struct representation *p
 
     pls->parent = s;
 
-    // First load/refresh... guess the start number using the timeline and duration
+    // Guess the start number using the timeline and duration (if not set)
     pls->start_number = pls->first_seq_no = guess_start_number(c, pls);
     if (!pls->last_seq_no) {
         pls->last_seq_no = calc_max_seg_no(pls, s->priv_data);
