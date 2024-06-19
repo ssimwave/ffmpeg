@@ -1588,6 +1588,23 @@ static void move_segments(struct representation *rep_src, struct representation 
     }
 }
 
+static int64_t guess_start_number(DASHContext* c, struct representation* rep) {
+    int64_t duration = rep->fragment_duration;
+    int64_t startNumber = rep->start_number;
+    if (c->use_timeline_segment_offset_correction && !rep->found_start_number && rep->timelines && rep->n_timelines) {
+        // Best guess: ((wall clock time - availabilityStartTime ) / (duration / timescale ))
+        if (!duration) {
+            // The timeline segment duration can vary +/-50% between segments, but its our best guess.
+            duration = rep->timelines[0]->duration;
+        }
+        if (duration) {
+            startNumber = ((get_current_time_in_sec() - c->availability_start_time) * rep->fragment_timescale)/ (duration);
+            av_log(c, AV_LOG_DEBUG, "Guessing start_number from timeline: [%"PRId64"]", startNumber);
+        }
+    }
+    return startNumber;
+}
+
 static void fix_start_number(DASHContext* c, struct representation** old_reps, struct representation** new_reps, int n_reps, const char* label) {
     int64_t last_end_time = 0;
     int64_t last_seq_no = 0;
@@ -1602,11 +1619,6 @@ static void fix_start_number(DASHContext* c, struct representation** old_reps, s
         struct representation *last_rep = old_reps[i];
         struct representation *new_rep = new_reps[i];
         if (!new_rep->found_start_number && new_rep->timelines && new_rep->n_timelines > 0) {
-            if (last_rep->last_seq_no == 0) {
-                // First load/refresh. Wait till we've properly detected a segment. We only want to fixup representations after the first
-                // load.
-                continue;
-            }
             // The representation is using timeline mode - and has no start number hint. So try to guess the start 
             // number by finding where the last segment in the previous version of the representation is in the current
             // representation version. We can use this to find the number of segments which have been dropped since the
@@ -1616,9 +1628,16 @@ static void fix_start_number(DASHContext* c, struct representation** old_reps, s
             last_seq_no = calc_next_seg_no_from_timelines(c, new_rep, last_end_time * new_rep->fragment_timescale - 1);
             if (last_seq_no < 0) {
                 // Previous edge sequence is outside of the current playlist... which means that an entire timeShiftBufferDepth worth
-                // of time (or more) has passed and every segment in the playlist is new... we should be ok just restarting numbering
-                // (ie. don't do anything)
-                av_log(c, AV_LOG_WARNING, "Previous edge segment not found in manifest, discontinuity suspected. Segment numbers may be reset.\n");
+                // of time (or more) has passed and every segment in the playlist is new...
+                // Try to estimate the start sequence and segment number from the timeline
+                av_log(c, AV_LOG_WARNING, "Previous edge segment not found in manifest, discontinuity suspected\n");
+                new_start_number = guess_start_number(c, new_rep);
+                if (new_start_number < last_rep->last_seq_no + 1) {
+                    av_log(c, AV_LOG_DEBUG, "Fixing %s timeline. start_number: [%"PRId64"], new: [%"PRId64"]\n",
+                           label, new_rep->start_number, last_rep->last_seq_no + 1);
+                    new_start_number = last_rep->last_seq_no + 1;
+                }
+                new_rep->start_number = new_rep->first_seq_no = new_start_number;
                 continue;
             }
             new_last_seq_no = calc_max_seg_no(new_rep, c);
@@ -1627,8 +1646,8 @@ static void fix_start_number(DASHContext* c, struct representation** old_reps, s
             new_start_number = last_rep->start_number + (new_last_seq_no - last_seq_no);
             if (new_rep->start_number != new_start_number) {
                 // Update start/first_seq_no (last_seq_no will be recalculated in move_timelines/move_segments)
-                av_log(c, AV_LOG_DEBUG, "Fixing %s timeline. start_number: [%"PRId64"] first_seq_no: [%"PRId64"], new: [%"PRId64"]\n",
-                        label, new_rep->start_number, new_rep->first_seq_no, new_start_number);
+                av_log(c, AV_LOG_DEBUG, "Fixing %s timeline. start_number: [%"PRId64"], new: [%"PRId64"]\n",
+                       label, new_rep->start_number, new_start_number);
                 new_rep->start_number = new_rep->first_seq_no = new_start_number;
             }
         }
@@ -1997,7 +2016,7 @@ static void delay_reload(DASHContext *c, int64_t reload_count)
         delay = c->reload_retry_interval * 1000;
     }
     if (delay > 0) {
-        av_log(c, AV_LOG_DEBUG, "Segment not ready (reload_count: %"PRId64"), retrying again in %ldms\n", reload_count, delay/1000);
+        av_log(c, AV_LOG_DEBUG, "Segment not ready (reload_count: %"PRId64"), retrying again in %dms\n", reload_count, delay/1000);
         av_usleep(delay);
     }
 }
@@ -2205,11 +2224,14 @@ fail:
 
 static int open_demux_for_component(AVFormatContext *s, struct representation *pls)
 {
+    DASHContext *c = s->priv_data;
     int ret = 0;
     int i;
 
     pls->parent = s;
 
+    // First load/refresh... guess the start number using the timeline and duration
+    pls->start_number = pls->first_seq_no = guess_start_number(c, pls);
     if (!pls->last_seq_no) {
         pls->last_seq_no = calc_max_seg_no(pls, s->priv_data);
     }
