@@ -1589,17 +1589,16 @@ static void move_segments(struct representation *rep_src, struct representation 
 }
 
 static int64_t guess_start_number(DASHContext* c, struct representation* rep) {
-    int64_t duration = rep->fragment_duration;
+    int64_t duration;
+    int64_t time;
     int64_t startNumber = rep->start_number;
-    if (c->use_timeline_segment_offset_correction && !rep->found_start_number && rep->timelines && rep->n_timelines) {
-        // Best guess: ((wall clock time - availabilityStartTime ) / (duration / timescale ))
-        if (!duration) {
-            // The timeline segment duration can vary +/-50% between segments, but its our best guess.
-            duration = rep->timelines[0]->duration;
-        }
+    if (c->use_timeline_segment_offset_correction && c->is_live && !rep->found_start_number && rep->timelines && rep->n_timelines) {
+        // The timeline segment duration can vary +/-50% between segments, but its our best guess.
+        duration = rep->timelines[0]->duration;
+        time = rep->timelines[0]->starttime;
         if (duration) {
-            startNumber = ((get_current_time_in_sec() - c->availability_start_time) * rep->fragment_timescale)/ (duration);
-            av_log(c, AV_LOG_DEBUG, "Guessing start_number from timeline: [%"PRId64"]\n", startNumber);
+            startNumber = time / duration;
+            av_log(c, AV_LOG_DEBUG, "Guessing start_number from segment starttime [%"PRId64"] and duration [%"PRId64"] -> [%"PRId64"]\n", time, duration, startNumber);
         }
     }
     return startNumber;
@@ -1611,7 +1610,7 @@ static void fix_start_number(DASHContext* c, struct representation** old_reps, s
     int64_t new_last_seq_no = 0;
     int64_t new_start_number = 0;
 
-    if (!c->use_timeline_segment_offset_correction) {
+    if (!c->use_timeline_segment_offset_correction || !c->is_live) {
         return;
     }
 
