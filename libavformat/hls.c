@@ -2694,8 +2694,8 @@ static int hls_read_packet(AVFormatContext *s, AVPacket *pkt)
             relative_seq_no = cur_seq_no - pls->start_seq_no;
 
             if (pls->playlist_reload_delay > 0) {
-                av_dict_set_int(&metadata_dict, "playlistReloadDelay", pls->playlist_reload_delay, 0);
-                av_dict_set_int(&metadata_dict, "playlistReloadParse", pls->playlist_reload_parse, 0);
+                av_dict_set_int(&metadata_dict, "playlistReloadDelay", pls->playlist_reload_delay / 1000, 0);
+                av_dict_set_int(&metadata_dict, "playlistReloadParse", pls->playlist_reload_parse / 1000, 0);
                 av_dict_set_int(&metadata_dict, "playlistReloadCount", pls->playlist_reload_count, 0);
                 pls->playlist_reload_delay = 0;
             }
