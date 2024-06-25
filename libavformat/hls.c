@@ -1628,7 +1628,7 @@ reload:
             /* If we need to reload the playlist again below (if there's still no more segments),
              * switch to configured reload retry interval.
              * If reload retry interval is not set, default to target duration / 2 */
-            reload_interval = (c->reload_retry_interval == -1) ?
+            reload_interval = (c->reload_retry_interval == 0) ?
                 (v->target_duration / 2) : (c->reload_retry_interval * 1000);
         }
         if (v->cur_seq_no < v->start_seq_no) {
@@ -1655,7 +1655,7 @@ reload:
             while (av_gettime_relative() - v->last_load_time < reload_interval) {
                 if (ff_check_interrupt(c->interrupt_callback))
                     return AVERROR_EXIT;
-                if (c->reload_retry_interval == -1) {
+                if (c->reload_retry_interval == 0) {
                     av_usleep(100*1000);
                 }
                 else {
@@ -2745,7 +2745,7 @@ static const AVOption hls_options[] = {
     {"max_reload", "Maximum number of times a insufficient list is attempted to be reloaded",
         OFFSET(max_reload), AV_OPT_TYPE_INT, {.i64 = 1000}, 0, INT_MAX, FLAGS},
     {"reload_retry_interval", "Interval in ms to wait before retrying playlist reload. If not set, defaults to target duration/2",
-        OFFSET(reload_retry_interval), AV_OPT_TYPE_INT, {.i64 = -1}, 0, INT_MAX, FLAGS},
+        OFFSET(reload_retry_interval), AV_OPT_TYPE_INT, {.i64 = 0}, 0, INT_MAX, FLAGS},
     {"m3u8_hold_counters", "The maximum number of times to load m3u8 when it refreshes without new segments",
         OFFSET(m3u8_hold_counters), AV_OPT_TYPE_INT, {.i64 = 1000}, 0, INT_MAX, FLAGS},
     {"http_persistent", "Use persistent HTTP connections",
