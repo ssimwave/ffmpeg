@@ -2528,6 +2528,7 @@ static int dash_read_packet(AVFormatContext *s, AVPacket *pkt)
             av_dict_set_int(&metadata_dict, "fragTimescale", cur->fragment_timescale, 0);
 
             if (cur->n_timelines) {
+                av_dict_set_int(&metadata_dict, "segStartTime", get_segment_start_time_based_on_timeline(c, cur, cur->cur_seq_no), 0);
                 av_dict_set_int(&metadata_dict, "fragDuration", cur->timelines[0]->duration, 0);
             }
             else {
