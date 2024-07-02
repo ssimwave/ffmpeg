@@ -191,7 +191,6 @@ struct playlist {
     int64_t playlist_reload_start;
     int playlist_reload_count;
     int playlist_reload_delay;
-    int playlist_reload_parse;
 };
 
 /*
@@ -842,21 +841,10 @@ static int parse_playlist(HLSContext *c, const char *url,
     int prev_n_segments = 0;
     int64_t prev_start_seq_no = -1;
 
-    int64_t parse_start;
-    int64_t start;
-    int64_t open_url = 0;
-    int64_t open_io = 0;
-    int64_t parse = 0;
-    int64_t cleanup = 0;
-    int64_t total = 0;
-
     // Reset variant count
     c->variant_count = 0;
 
-    parse_start = av_gettime_relative();
-
     if (is_http && !in && c->http_persistent && c->playlist_pb) {
-        start = av_gettime_relative();
         in = c->playlist_pb;
         ret = open_url_keepalive(c->ctx, &c->playlist_pb, url, NULL);
         if (ret == AVERROR_EXIT) {
@@ -868,12 +856,9 @@ static int parse_playlist(HLSContext *c, const char *url,
                     url, av_err2str(ret));
             in = NULL;
         }
-        open_url = av_gettime_relative() - start;
     }
 
     if (!in) {
-        start = av_gettime_relative();
-
         AVDictionary *opts = NULL;
         av_dict_copy(&opts, c->avio_opts, 0);
 
@@ -889,11 +874,7 @@ static int parse_playlist(HLSContext *c, const char *url,
             c->playlist_pb = in;
         else
             close_in = 1;
-
-        open_io = av_gettime_relative() - start;
     }
-
-    start = av_gettime_relative();
 
     if (av_opt_get(in, "location", AV_OPT_SEARCH_CHILDREN, &new_url) >= 0)
         url = new_url;
@@ -1121,9 +1102,7 @@ static int parse_playlist(HLSContext *c, const char *url,
             }
         }
     }
-    parse = av_gettime_relative() - start;
 
-    start = av_gettime_relative();
     if (prev_segments) {
         if (pls->start_seq_no > prev_start_seq_no && c->first_timestamp != AV_NOPTS_VALUE) {
             int64_t prev_timestamp = c->first_timestamp;
@@ -1155,14 +1134,6 @@ fail:
         !(c->variants[0]->playlists[0]->finished ||
           c->variants[0]->playlists[0]->type == PLS_TYPE_EVENT))
         c->ctx->ctx_flags |= AVFMTCTX_UNSEEKABLE;
-
-    cleanup = av_gettime_relative() - start;
-    total = av_gettime_relative() - parse_start;
-    if (pls && (pls->start_seq_no != prev_start_seq_no || pls->n_segments != prev_n_segments)) {
-        av_log(c->ctx, AV_LOG_DEBUG, "Parsed NEW playlist: total %ld open_url %ld open_io %ld parse %ld cleanup %ld new segments %d \n",
-                total / 1000, open_url / 1000, open_io / 1000, parse / 1000, cleanup / 1000,
-                (pls->start_seq_no - prev_start_seq_no) + (pls->n_segments - prev_n_segments));
-    }
 
     return ret;
 }
@@ -1625,10 +1596,6 @@ static int open_segment(struct playlist *v)
 
     if (!v->input || (c->http_persistent && v->input_read_done)) {
         int64_t reload_interval;
-        int64_t parse_start;
-        int64_t parse_time;
-        int prev_n_segments = 0;
-        int64_t prev_start_seq_no = -1;
 
         /* Check that the playlist is still needed before opening a new
          * segment. */
@@ -1659,9 +1626,6 @@ reload:
             av_gettime_relative() - v->last_load_time >= reload_interval) {
 
             reload_count++;
-            parse_start = av_gettime_relative();
-            prev_start_seq_no = v->start_seq_no;
-            prev_n_segments = v->n_segments;
 
             if ((ret = parse_playlist(c, v->url, v, NULL)) < 0) {
                 if (ret != AVERROR_EXIT)
@@ -1670,22 +1634,11 @@ reload:
                 return ret;
             }
 
-            parse_time = av_gettime_relative() - parse_start;
-            v->playlist_reload_parse += parse_time;
-
-            if (v->start_seq_no == prev_start_seq_no && v->n_segments == prev_n_segments) {
-                av_log(c->ctx, AV_LOG_DEBUG, "Parsed SAME playlist: %ld ms\n", parse_time / 1000);
-            }
-
             /* If we need to reload the playlist again below (if there's still no more segments),
              * switch to configured reload retry interval.
              * If reload retry interval is not set, default to target duration / 2 */
-#if 1
-            reload_interval = c->reload_retry_interval * 1000;
-#else
             reload_interval = (c->reload_retry_interval == 0) ?
                 (v->target_duration / 2) : (c->reload_retry_interval * 1000);
-#endif
         }
         if (v->cur_seq_no < v->start_seq_no) {
             av_log(v->parent, AV_LOG_WARNING,
@@ -1708,27 +1661,6 @@ reload:
             if (v->finished)
                 return AVERROR_EOF;
 
-#if 1
-            if (!v->playlist_reload_start) {
-                v->playlist_reload_start = av_gettime_relative();
-                v->playlist_reload_delay = 0;
-                v->playlist_reload_parse = 0;
-            }
-
-            if (!v->playlist_reload_delay && v->playlist_reload_start - v->last_load_time < reload_interval) {
-                // Running ahead of playlist reload interval, sleep until we expect new playlist to be available
-                reload_interval -= (v->playlist_reload_start - v->last_load_time);
-                //reload_interval -= 400 * 1000; // HACK!!! ~400 ms for parsing ?
-            }
-            reload_interval = FFMIN(reload_interval, c->reload_retry_interval * 1000);
-
-            if (reload_interval > 0) {
-                av_log(c->ctx, AV_LOG_DEBUG, "Playlist reload: wait %ld ms\n", reload_interval / 1000);
-
-                v->playlist_reload_delay += reload_interval;
-                av_usleep(reload_interval);
-            }
-#else
             while (av_gettime_relative() - v->last_load_time < reload_interval) {
                 if (ff_check_interrupt(c->interrupt_callback))
                     return AVERROR_EXIT;
@@ -1736,25 +1668,32 @@ reload:
                     av_usleep(100*1000);
                 }
                 else {
-                    // If we are out of segments, attempt first reload immediately,
-                    // sleep configured reload interval between retries thereafter
-                    reload_interval = (reload_count == 1) ? 0 : c->reload_retry_interval * 1000;
+                    if (!v->playlist_reload_start) {
+                        v->playlist_reload_start = av_gettime_relative();
+                        v->playlist_reload_delay = 0;
+                    }
+
+                    if (!v->playlist_reload_delay && v->playlist_reload_start - v->last_load_time < reload_interval) {
+                        // Running ahead of playlist reload interval, sleep until we expect new playlist to be available
+                        reload_interval -= (v->playlist_reload_start - v->last_load_time);
+                    }
+                    reload_interval = FFMIN(reload_interval, c->reload_retry_interval * 1000);
+
                     if (reload_interval > 0) {
                         av_usleep(reload_interval);
+                        v->playlist_reload_delay += reload_interval;
                     }
                 }
             }
-#endif
 
             /* Enough time has elapsed since the last reload */
             goto reload;
         }
 
         if (v->playlist_reload_start > 0) {
-            int64_t total_delay = av_gettime_relative() - v->playlist_reload_start;
             if (reload_count > 1) {
-                av_log(c->ctx, AV_LOG_DEBUG, "Playlist reload time: parse %d sleep %d reloads %d\n",
-                        v->playlist_reload_parse, v->playlist_reload_delay, reload_count);
+                av_log(c->ctx, AV_LOG_DEBUG, "Playlist reload: sleep %d reloads %d\n",
+                        v->playlist_reload_delay, reload_count);
             }
 
             v->playlist_reload_count = reload_count;
@@ -2680,11 +2619,11 @@ static int hls_read_packet(AVFormatContext *s, AVPacket *pkt)
         /* Segment metadata */
         {
             if (st->codecpar->codec_type == AVMEDIA_TYPE_VIDEO) {
-                av_log(c->ctx, AV_LOG_DEBUG, "Segment %ld (playlist %d packet %d %s stream %d) key frame %s, pkt position (%ld - %ld), playlist reload delay %d\n",
+                av_log(c->ctx, AV_LOG_DEBUG, "Segment %ld (playlist %d packet %d %s stream %d) key frame %s, pkt position (%ld - %ld)\n",
                         pls->cur_seq_no, pls->index, pls->video_packets_in_segment,
                         avcodec_get_name(st->codecpar->codec_id), pkt->stream_index,
                         (pkt->flags & AV_PKT_FLAG_KEY) ? "true" : "false",
-                        pkt->pos, pkt->pos + pkt->size, pls->playlist_reload_delay);
+                        pkt->pos, pkt->pos + pkt->size);
 
                 pls->video_packets_in_segment++;
             }
@@ -2695,7 +2634,6 @@ static int hls_read_packet(AVFormatContext *s, AVPacket *pkt)
 
             if (pls->playlist_reload_delay > 0) {
                 av_dict_set_int(&metadata_dict, "playlistReloadDelay", pls->playlist_reload_delay / 1000, 0);
-                av_dict_set_int(&metadata_dict, "playlistReloadParse", pls->playlist_reload_parse / 1000, 0);
                 av_dict_set_int(&metadata_dict, "playlistReloadCount", pls->playlist_reload_count, 0);
                 pls->playlist_reload_delay = 0;
             }
