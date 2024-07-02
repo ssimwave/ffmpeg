@@ -184,9 +184,13 @@ struct playlist {
     void* mpegts_parser_input_context_backup;
 
     int64_t segment_boundary_position;
-    int packets_in_segment;
+    int video_packets_in_segment;
     int just_opened;
     int first_segment;
+
+    int64_t playlist_reload_start;
+    int playlist_reload_count;
+    int playlist_reload_delay;
 };
 
 /*
@@ -1098,6 +1102,7 @@ static int parse_playlist(HLSContext *c, const char *url,
             }
         }
     }
+
     if (prev_segments) {
         if (pls->start_seq_no > prev_start_seq_no && c->first_timestamp != AV_NOPTS_VALUE) {
             int64_t prev_timestamp = c->first_timestamp;
@@ -1129,6 +1134,7 @@ fail:
         !(c->variants[0]->playlists[0]->finished ||
           c->variants[0]->playlists[0]->type == PLS_TYPE_EVENT))
         c->ctx->ctx_flags |= AVFMTCTX_UNSEEKABLE;
+
     return ret;
 }
 
@@ -1614,17 +1620,20 @@ static int open_segment(struct playlist *v)
         reload_interval = default_reload_interval(v);
 
 reload:
-        reload_count++;
         if (reload_count > c->max_reload)
             return AVERROR_EOF;
         if (!v->finished &&
             av_gettime_relative() - v->last_load_time >= reload_interval) {
+
+            reload_count++;
+
             if ((ret = parse_playlist(c, v->url, v, NULL)) < 0) {
                 if (ret != AVERROR_EXIT)
                     av_log(v->parent, AV_LOG_WARNING, "Failed to reload playlist %d\n",
                            v->index);
                 return ret;
             }
+
             /* If we need to reload the playlist again below (if there's still no more segments),
              * switch to configured reload retry interval.
              * If reload retry interval is not set, default to target duration / 2 */
@@ -1659,17 +1668,36 @@ reload:
                     av_usleep(100*1000);
                 }
                 else {
-                    // If we are out of segments, attempt first reload immediately,
-                    // sleep configured reload interval between retries thereafter
-                    reload_interval = (reload_count == 1) ? 0 : c->reload_retry_interval * 1000;
+                    if (!v->playlist_reload_start) {
+                        v->playlist_reload_start = av_gettime_relative();
+                        v->playlist_reload_delay = 0;
+                    }
+
+                    if (!v->playlist_reload_delay && v->playlist_reload_start - v->last_load_time < reload_interval) {
+                        // Running ahead of playlist reload interval, sleep until we expect new playlist to be available
+                        reload_interval -= (v->playlist_reload_start - v->last_load_time);
+                    }
+                    reload_interval = FFMIN(reload_interval, c->reload_retry_interval * 1000);
+
                     if (reload_interval > 0) {
                         av_usleep(reload_interval);
+                        v->playlist_reload_delay += reload_interval;
                     }
                 }
             }
 
             /* Enough time has elapsed since the last reload */
             goto reload;
+        }
+
+        if (v->playlist_reload_start > 0) {
+            if (reload_count > 1) {
+                av_log(c->ctx, AV_LOG_DEBUG, "Playlist reload: sleep %d reloads %d\n",
+                        v->playlist_reload_delay, reload_count);
+            }
+
+            v->playlist_reload_count = reload_count;
+            v->playlist_reload_start = 0;
         }
 
         v->input_read_done = 0;
@@ -1799,8 +1827,8 @@ static int read_data(void *opaque, uint8_t *buf, int buf_size)
     // Set new segment boundary position - only used for logging
     // Note: using "cur_seg_offset" instead of segment "actual_size" as it matches recorded packet position
     v->segment_boundary_position += v->cur_seg_offset;
-    av_log(c, AV_LOG_DEBUG, "Segment %ld End: playlist %d packets read %d position %ld\n",
-            v->cur_seq_no, v->index, v->packets_in_segment, v->segment_boundary_position);
+    av_log(c->ctx, AV_LOG_DEBUG, "Segment %ld End: playlist %d packets read %d position %ld\n",
+            v->cur_seq_no, v->index, v->video_packets_in_segment, v->segment_boundary_position);
 
     // Don't open new segment file now
     // Return EOF
@@ -2465,7 +2493,7 @@ static int hls_read_packet(AVFormatContext *s, AVPacket *pkt)
                 if (ret == AVERROR_EOF) {
                     pls->cur_seq_no++;
                     c->cur_seq_no = pls->cur_seq_no;
-                    pls->packets_in_segment = 0;
+                    pls->video_packets_in_segment = 0;
 
                     ret = open_segment(pls);
                     if (ret == 0) {
@@ -2590,16 +2618,25 @@ static int hls_read_packet(AVFormatContext *s, AVPacket *pkt)
 
         /* Segment metadata */
         {
-            av_log(c, AV_LOG_DEBUG, "Segment %ld (playlist %d packet %d) key frame %s, pkt position (%ld - %ld)\n",
-                    pls->cur_seq_no, pls->index, pls->packets_in_segment,
-                    (pkt->flags & AV_PKT_FLAG_KEY) ? "true" : "false",
-                    pkt->pos, pkt->pos + pkt->size);
+            if (st->codecpar->codec_type == AVMEDIA_TYPE_VIDEO) {
+                av_log(c->ctx, AV_LOG_DEBUG, "Segment %ld (playlist %d packet %d %s stream %d) key frame %s, pkt position (%ld - %ld)\n",
+                        pls->cur_seq_no, pls->index, pls->video_packets_in_segment,
+                        avcodec_get_name(st->codecpar->codec_id), pkt->stream_index,
+                        (pkt->flags & AV_PKT_FLAG_KEY) ? "true" : "false",
+                        pkt->pos, pkt->pos + pkt->size);
 
-            pls->packets_in_segment++;
+                pls->video_packets_in_segment++;
+            }
 
             cur_seq_no = pls->cur_seq_no;
             av_dict_set_int(&metadata_dict, "segNumber", cur_seq_no, 0);
             relative_seq_no = cur_seq_no - pls->start_seq_no;
+
+            if (pls->playlist_reload_delay > 0) {
+                av_dict_set_int(&metadata_dict, "playlistReloadDelay", pls->playlist_reload_delay / 1000, 0);
+                av_dict_set_int(&metadata_dict, "playlistReloadCount", pls->playlist_reload_count, 0);
+                pls->playlist_reload_delay = 0;
+            }
         }
         if (relative_seq_no < pls->n_segments) {
             av_dict_set_int(&metadata_dict, "segSize", pls->segments[relative_seq_no]->actual_size, 0);
