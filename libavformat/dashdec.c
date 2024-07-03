@@ -161,6 +161,7 @@ typedef struct DASHContext {
     int start_on_live_edge;
     int max_reload;
     int reload_retry_interval;
+    int default_reload_retry_interval;
     // END SSIMWAVE ADDITIONS
 
     int is_live;
@@ -1335,7 +1336,7 @@ static int parse_manifest(AVFormatContext *s, const char *url, AVIOContext *in)
                 av_log(s, AV_LOG_TRACE, "c->publish_time = [%"PRId64"]\n", c->publish_time);
             } else if (!av_strcasecmp(attr->name, "minimumUpdatePeriod")) {
                 c->minimum_update_period = get_duration_insec(s, val);
-                c->reload_retry_interval = (c->minimum_update_period * 1000) / 2;
+                c->default_reload_retry_interval = (c->minimum_update_period * 1000) / 2;
                 av_log(s, AV_LOG_TRACE, "c->minimum_update_period = [%"PRId64"]\n", c->minimum_update_period);
             } else if (!av_strcasecmp(attr->name, "timeShiftBufferDepth")) {
                 c->time_shift_buffer_depth = get_duration_insec(s, val);
@@ -2017,7 +2018,11 @@ static void delay_reload(DASHContext *c, int64_t reload_count)
 
     // Attempt first reload immediately, otherwise wait the reload
     if (reload_count > 1) {
-        delay = c->reload_retry_interval * 1000;
+        if (c->reload_retry_interval > 0) {
+            delay = c->reload_retry_interval * 1000;
+        } else {
+            delay = c->default_reload_retry_interval * 1000;
+        }
     }
     if (delay > 0) {
         av_log(c, AV_LOG_DEBUG, "Segment not ready (reload_count: %"PRId64"), retrying again in %dms\n", reload_count, delay/1000);
