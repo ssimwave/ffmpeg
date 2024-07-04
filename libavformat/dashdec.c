@@ -2703,7 +2703,7 @@ static const AVOption dash_options[] = {
     {"max_reload", "Maximum number of times a list is attempted to be reloaded during live (dynamic) playback",
         OFFSET(max_reload), AV_OPT_TYPE_INT, {.i64 = 100}, 0, INT_MAX, FLAGS},
     {"reload_retry_interval", "Interval in ms to wait before retrying playlist reload. If not set, defaults to mimumumUpdatePeriod/2",
-        OFFSET(reload_retry_interval), AV_OPT_TYPE_INT, {.i64 = -1}, 0, INT_MAX, FLAGS},
+        OFFSET(reload_retry_interval), AV_OPT_TYPE_INT, {.i64 = 0}, 0, INT_MAX, FLAGS},
     {NULL}
 };
 
