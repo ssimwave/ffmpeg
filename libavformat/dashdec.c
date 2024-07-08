@@ -2052,8 +2052,11 @@ restart:
     if (!v->input) {
         free_fragment(&v->cur_seg);
         reload_count++;
-        if (reload_count > c->max_reload)
-            return AVERROR_EOF;
+        if (reload_count > c->max_reload) {
+            av_log(v->parent, AV_LOG_ERROR, "Timed out while waiting for new segment\n");
+            ret = AVERROR_EXIT;
+            goto end;
+        }
         ret = get_current_fragment(v, &v->cur_seg);
         if (ret == AVERROR(EAGAIN) && c->is_live) {
             // Fragment not ready yet, sleep and try again
@@ -2103,8 +2106,11 @@ restart:
     /* check the v->cur_seg, if it is null, get current and double check if the new v->cur_seg*/
     if (!v->cur_seg) {
         reload_count++;
-        if (reload_count > c->max_reload)
-            return AVERROR_EOF;
+        if (reload_count > c->max_reload) {
+            av_log(v->parent, AV_LOG_ERROR, "Timed out while waiting for new segment\n");
+            ret = AVERROR_EXIT;
+            goto end;
+        }
         ret = get_current_fragment(v, &v->cur_seg);
         if (ret == AVERROR(EAGAIN) && c->is_live) {
             // Fragment not ready yet, sleep and try again
