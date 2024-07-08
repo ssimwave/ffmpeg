@@ -2059,6 +2059,10 @@ restart:
         }
         ret = get_current_fragment(v, &v->cur_seg);
         if (ret == AVERROR(EAGAIN) && c->is_live) {
+            if (ff_check_interrupt(c->interrupt_callback)) {
+                ret = AVERROR_EXIT;
+                goto end;
+            }
             // Fragment not ready yet, sleep and try again
             delay_reload(c, reload_count);
             goto restart;
@@ -2113,6 +2117,10 @@ restart:
         }
         ret = get_current_fragment(v, &v->cur_seg);
         if (ret == AVERROR(EAGAIN) && c->is_live) {
+            if (ff_check_interrupt(c->interrupt_callback)) {
+                ret = AVERROR_EXIT;
+                goto end;
+            }
             // Fragment not ready yet, sleep and try again
             delay_reload(c, reload_count);
             goto restart;
