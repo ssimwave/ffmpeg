@@ -2135,8 +2135,12 @@ restart:
     }
 
     ret = read_from_url(v, v->cur_seg, buf, buf_size);
-    if (ret > 0)
+    if (ret > 0) {
         goto end;
+    } else if (ret == 0) {
+        // No bytes read, assume EOF.
+        ret = AVERROR_EOF;
+    }
 
     if (c->is_live || v->cur_seq_no < v->last_seq_no) {
         if (!v->is_restart_needed)
