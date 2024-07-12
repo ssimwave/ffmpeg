@@ -2139,6 +2139,7 @@ restart:
         goto end;
     } else if (ret == 0) {
         // No bytes read, assume EOF.
+        av_log(v->parent, AV_LOG_ERROR, "No bytes read, assume, file: %s\n", v->cur_seg->url);
         ret = AVERROR_EOF;
     }
 
