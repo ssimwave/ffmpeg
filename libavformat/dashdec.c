@@ -2138,9 +2138,17 @@ restart:
     if (ret > 0) {
         goto end;
     } else if (ret == 0) {
-        // No bytes read, assume EOF.
-        av_log(v->parent, AV_LOG_ERROR, "No bytes read, assume, file: %s\n", v->cur_seg->url);
+        // NOTE:
+        // - mov_read_header->mov_read_default->avio_seek->fill_buffers will sometimes try to seek past EOF when decoding headers.
+        //   read_from_url will ignore the call and return 0 (but not set the eof flag). This can cause an infinite loop.
+        // - This seems to occur when the file is invalid or replaced on disk (hard to say).
+        // - To prevent this make sure we return EOF when 0 bytes are read, avio_seek will treat this as EOF, and normal DASH decoding
+        //   will simply try again/load the next segment.
         ret = AVERROR_EOF;
+        if (v->is_restart_needed) {
+            // Attempt to log when the above error occurs.
+            av_log(v->parent, AV_LOG_ERROR, "EOF reached while attempting to read new segment, file: %s\n", v->cur_seg->url);
+        }
     }
 
     if (c->is_live || v->cur_seq_no < v->last_seq_no) {
