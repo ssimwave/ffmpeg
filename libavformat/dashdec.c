@@ -2135,8 +2135,18 @@ restart:
     }
 
     ret = read_from_url(v, v->cur_seg, buf, buf_size);
-    if (ret > 0)
+    if (ret > 0) {
         goto end;
+    } else if (ret == 0) {
+        // NOTE:
+        // - mov_read_header->mov_read_default->avio_seek->fill_buffers will sometimes try to seek past EOF when decoding headers.
+        //   read_from_url will ignore the call and return 0 (but not set the eof flag). This can cause an infinite loop.
+        // - This seems to occur when the file is invalid or replaced on disk (hard to say).
+        // - To prevent this make sure we return EOF when 0 bytes are read, avio_seek will treat this as EOF, and normal DASH decoding
+        //   will simply try again/load the next segment.
+        av_log(v->parent, AV_LOG_DEBUG, "EOF reached, file: %s\n", v->cur_seg->url);
+        ret = AVERROR_EOF;
+    }
 
     if (c->is_live || v->cur_seq_no < v->last_seq_no) {
         if (!v->is_restart_needed)
