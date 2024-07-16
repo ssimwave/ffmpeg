@@ -2144,11 +2144,8 @@ restart:
         // - This seems to occur when the file is invalid or replaced on disk (hard to say).
         // - To prevent this make sure we return EOF when 0 bytes are read, avio_seek will treat this as EOF, and normal DASH decoding
         //   will simply try again/load the next segment.
+        av_log(v->parent, AV_LOG_DEBUG, "EOF reached, file: %s\n", v->cur_seg->url);
         ret = AVERROR_EOF;
-        if (v->is_restart_needed) {
-            // Attempt to log when the above error occurs.
-            av_log(v->parent, AV_LOG_ERROR, "EOF reached while attempting to read new segment, file: %s\n", v->cur_seg->url);
-        }
     }
 
     if (c->is_live || v->cur_seq_no < v->last_seq_no) {
