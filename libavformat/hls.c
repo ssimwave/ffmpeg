@@ -2368,8 +2368,14 @@ static int hls_read_header(AVFormatContext *s)
          * Copy any metadata from playlist to main streams, but do not set
          * event flags.
          */
-        if (pls->n_main_streams)
+        if (pls->n_main_streams) {
             av_dict_copy(&pls->main_streams[0]->metadata, pls->ctx->metadata, 0);
+
+            for (size_t j = 0; j < pls->n_main_streams; j++) {
+                AVStream *st = pls->main_streams[j];
+                av_dict_set_int(&st->metadata, "finished", pls->finished, 0);
+            }
+        }
 
         add_metadata_from_renditions(s, pls, AVMEDIA_TYPE_AUDIO);
         add_metadata_from_renditions(s, pls, AVMEDIA_TYPE_VIDEO);
@@ -2587,6 +2593,10 @@ static int hls_read_packet(AVFormatContext *s, AVPacket *pkt)
                 st->event_flags |= AVSTREAM_EVENT_FLAG_METADATA_UPDATED;
             }
             pls->ctx->event_flags &= ~AVFMT_EVENT_FLAG_METADATA_UPDATED;
+        }
+        for (size_t j = 0; j < pls->n_main_streams; j++) {
+            AVStream *st = pls->main_streams[j];
+            av_dict_set_int(&st->metadata, "finished", pls->finished, 0);
         }
 
         /* check if noheader flag has been cleared by the subdemuxer */
