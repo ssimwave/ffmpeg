@@ -1642,11 +1642,11 @@ static void fix_start_number(DASHContext* c, struct representation** old_reps, s
         struct representation *new_rep = new_reps[i];
         if (!new_rep->found_start_number && new_rep->timelines && new_rep->n_timelines > 0) {
             if (!last_rep->last_seq_no) {
-                // We haven't called open_demux_for_component on this representation yet, skip for now. 
+                // We haven't called open_demux_for_component on this representation yet, skip for now.
                 continue;
             }
 
-            // The representation is using timeline mode - and has no start number hint. So try to guess the start 
+            // The representation is using timeline mode - and has no start number hint. So try to guess the start
             // number by finding where the last segment in the previous version of the representation is in the current
             // representation version. We can use this to find the number of segments which have been dropped since the
             // representation was updated. We can then infer the new start_number based on this information, and the
@@ -2392,6 +2392,7 @@ static int dash_read_header(AVFormatContext *s)
     } else {
         av_dict_set(&c->avio_opts, "seekable", "0", 0);
     }
+    av_dict_set_int(&s->metadata, "dynamic", c->is_live, 0);
 
     if(c->n_videos)
         c->is_init_section_common_video = is_common_init_section_exist(c->videos, c->n_videos);
