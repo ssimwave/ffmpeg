@@ -912,6 +912,26 @@ static int parse_manifest_representation(AVFormatContext *s, const char *url,
         av_log(s, AV_LOG_VERBOSE, "Parsing '%s' - skipp not supported representation type\n", url);
         return 0;
     }
+    else {
+        // convert selected representation to our internal struct
+        val = xmlGetProp(representation_node, "id");
+        if (val && c->selected_video_rep_id && type == AVMEDIA_TYPE_VIDEO) {
+            size_t lengthVal = strlen(val);
+            size_t lengthSelected = strlen(c->selected_video_rep_id);
+            if (strncmp(val, c->selected_video_rep_id, lengthVal)) {
+                xmlFree(val);
+                return 0;
+            }
+        }
+        else if (val && c->selected_audio_rep_id && type == AVMEDIA_TYPE_AUDIO) {
+            size_t lengthVal = strlen(val);
+            size_t lengthSelected = strlen(c->selected_audio_rep_id);
+            if (strncmp(val, c->selected_audio_rep_id, lengthVal)) {
+                xmlFree(val);
+                return 0;
+            }
+        }
+    }
 
     // convert selected representation to our internal struct
     rep = av_mallocz(sizeof(struct representation));
