@@ -187,6 +187,7 @@ struct playlist {
     int video_packets_in_segment;
     int just_opened;
     int first_segment;
+    int open_next_segment;
 
     int64_t playlist_reload_start;
     int playlist_reload_count;
@@ -1591,6 +1592,8 @@ static int open_segment(struct playlist *v)
     int reload_count = 0;
     struct segment *seg;
 
+    v->open_next_segment = 0;
+
     if (!v->needed)
         return AVERROR_EOF;
 
@@ -1799,6 +1802,17 @@ static int read_data(void *opaque, uint8_t *buf, int buf_size)
 
     seg = current_segment(v);
     ret = read_from_url(v, seg, buf, buf_size);
+
+    if (ret >= 0) {
+        av_log(NULL, AV_LOG_DEBUG, "==========read_from_url  %d\n", ret);
+    }
+    else {
+        // Get error string from ret value
+        char errbuf[1024];
+        av_strerror(ret, errbuf, sizeof(errbuf));
+        av_log(NULL, AV_LOG_DEBUG, "==========read_from_url  %s\n", errbuf);
+    }
+
     if (ret > 0) {
         if (v->just_opened && v->is_id3_timestamped != 0) {
             /* Intercept ID3 tags here, elementary audio streams are required
@@ -1833,6 +1847,7 @@ static int read_data(void *opaque, uint8_t *buf, int buf_size)
     // Don't open new segment file now
     // Return EOF
     // hls_read_packet() will open the next segment file and increment the cur_seq_no
+    v->open_next_segment = 1;
     return AVERROR_EOF;
 }
 
@@ -2494,9 +2509,10 @@ static int hls_read_packet(AVFormatContext *s, AVPacket *pkt)
 
                 ret = av_read_frame(pls->ctx, pls->pkt);
 
-                // Subsequent segment file is opened and first frame is read,
+                // Subsequent segment file(s) are opened and first frame is read,
                 // only after all packets for the current segment are read
-                if (ret == AVERROR_EOF) {
+                // Skip corrupted/empty segments and continue as long as new segment is requested
+                while (ret == AVERROR_EOF && pls->open_next_segment) {
                     pls->cur_seq_no++;
                     c->cur_seq_no = pls->cur_seq_no;
                     pls->video_packets_in_segment = 0;
@@ -2504,6 +2520,12 @@ static int hls_read_packet(AVFormatContext *s, AVPacket *pkt)
                     ret = open_segment(pls);
                     if (ret == 0) {
                         ret = av_read_frame(pls->ctx, pls->pkt);
+                        if (ret == AVERROR_EOF && pls->open_next_segment) {
+                            // Check if packet is corrupt/empty ? If so, skip it and continue with next segment ?
+                            // If packet is corrupt/empty, clear it before reading next packet from next segment ?
+                            av_log(s, AV_LOG_DEBUG, "Empty segment %ld, open next segment and continue...\n", pls->cur_seq_no);
+                            continue;
+                        }
                     }
                 }
                 if (ret < 0) {
