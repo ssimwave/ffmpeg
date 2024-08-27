@@ -146,6 +146,11 @@ static int crypto_open2(URLContext *h, const char *uri, int flags, AVDictionary 
         goto err;
     }
 
+    if (c->hd && c->hd->filesize_reported) {
+        h->filesize_reported = c->hd->filesize_reported;
+        h->filesize = c->hd->filesize;
+    }
+
     if (flags & AVIO_FLAG_READ) {
         c->aes_decrypt = av_aes_alloc();
         if (!c->aes_decrypt) {

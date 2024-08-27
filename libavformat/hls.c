@@ -186,6 +186,7 @@ struct playlist {
     int video_packets_in_segment;
     int just_opened;
     int first_segment;
+    int open_next_segment;
 
     int64_t playlist_reload_start;
     int playlist_reload_count;
@@ -256,6 +257,7 @@ typedef struct HLSContext {
     char *sample_aes_iv;
     char *sample_aes_cek_location;
     int use_independent_segment_fetch_for_obtaining_size;
+    int reload_variant_playlist_on_http_error;
 } HLSContext;
 
 static int64_t get_actual_segment_size(struct playlist *pls, struct segment* seg) {
@@ -1666,6 +1668,8 @@ static int open_segment(struct playlist *v)
     int segment_retries = 0;
     struct segment *seg;
 
+    v->open_next_segment = 0;
+
     if (!v->needed)
         return AVERROR_EOF;
 
@@ -1706,6 +1710,22 @@ reload:
                 if (ret != AVERROR_EXIT)
                     av_log(v->parent, AV_LOG_WARNING, "Failed to reload playlist %d\n",
                            v->index);
+                if (c->reload_variant_playlist_on_http_error) {
+                    switch (ret) {
+                        case AVERROR_HTTP_NOT_FOUND:
+                        case AVERROR_HTTP_OTHER_4XX:
+                        case AVERROR_HTTP_SERVER_ERROR:
+                            {
+                                av_log(v->parent, AV_LOG_DEBUG, "Going to reload playlist %d, reload count %d\n",
+                                    v->index, reload_count);
+                                av_usleep(reload_interval);
+                                goto reload;
+                            }
+                            break;
+                        default:
+                            break;
+                    }
+                }
                 return ret;
             }
 
@@ -1882,6 +1902,19 @@ static int read_data(void *opaque, uint8_t *buf, int buf_size)
 
     seg = current_segment(v);
     ret = read_from_url(v, seg, buf, buf_size);
+
+    if (av_log_get_level() >= AV_LOG_DEBUG) {
+        if (ret >= 0) {
+            av_log(NULL, AV_LOG_DEBUG, "Read_from_url  %d\n", ret);
+        }
+        else {
+            // Get error string from ret value
+            char errbuf[1024];
+            av_strerror(ret, errbuf, sizeof(errbuf));
+            av_log(NULL, AV_LOG_DEBUG, "Read_from_url  %s\n", errbuf);
+        }
+    }
+
     if (ret > 0) {
         if (v->just_opened && v->is_id3_timestamped != 0) {
             /* Intercept ID3 tags here, elementary audio streams are required
@@ -1916,6 +1949,7 @@ static int read_data(void *opaque, uint8_t *buf, int buf_size)
     // Don't open new segment file now
     // Return EOF
     // hls_read_packet() will open the next segment file and increment the cur_seq_no
+    v->open_next_segment = 1;
     return AVERROR_EOF;
 }
 
@@ -2607,9 +2641,10 @@ static int hls_read_packet(AVFormatContext *s, AVPacket *pkt)
 
                 ret = av_read_frame(pls->ctx, pls->pkt);
 
-                // Subsequent segment file is opened and first frame is read,
-                // only after all packets for the current segment are read
-                if (ret == AVERROR_EOF) {
+                // Subsequent segment file(s) are opened and first frame is read,
+                // only after all packets for the current segment are read (or after seek)
+                // Skip corrupted/empty segments and continue as long as new segment is requested
+                while (ret == AVERROR_EOF && pls->open_next_segment) {
                     pls->cur_seq_no++;
                     c->cur_seq_no = pls->cur_seq_no;
                     pls->video_packets_in_segment = 0;
@@ -2617,6 +2652,11 @@ static int hls_read_packet(AVFormatContext *s, AVPacket *pkt)
                     ret = open_segment(pls);
                     if (ret == 0) {
                         ret = av_read_frame(pls->ctx, pls->pkt);
+                        if (ret == AVERROR_EOF && pls->open_next_segment) {
+                            // Check if segment is corrupt/empty ? If so, skip it and continue with next segment
+                            av_log(s, AV_LOG_WARNING, "Empty segment %ld, open next segment and continue...\n", pls->cur_seq_no);
+                            continue;
+                        }
                     }
                 }
                 if (ret < 0) {
@@ -2865,6 +2905,7 @@ static int hls_read_seek(AVFormatContext *s, int stream_index,
 
         pls->seek_timestamp = seek_timestamp;
         pls->seek_flags = flags;
+        pls->open_next_segment = 1;
 
         if (pls != seek_pls) {
             /* set closest segment seq_no for playlists not handled above */
@@ -2974,6 +3015,8 @@ static const AVOption hls_options[] = {
         {.str = ""}, 0, 0, FLAGS},
     { "use_independent_segment_fetch_for_obtaining_size", "Use patch for obtaining segment size (ie. double download)",
         OFFSET(use_independent_segment_fetch_for_obtaining_size), AV_OPT_TYPE_BOOL, {.i64 = 0}, 0, 1, FLAGS},
+    { "reload_variant_playlist_on_http_error", "Reload when faild to get the variant playlist during processing segments.",
+        OFFSET(reload_variant_playlist_on_http_error), AV_OPT_TYPE_BOOL, {.i64 = 0}, 0, 1, FLAGS},
     {NULL}
 };
 

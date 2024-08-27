@@ -914,7 +914,6 @@ static int parse_manifest_representation(AVFormatContext *s, const char *url,
         val = xmlGetProp(representation_node, "id");
         if (val && c->selected_video_rep_id && type == AVMEDIA_TYPE_VIDEO) {
             size_t lengthVal = strlen(val);
-            size_t lengthSelected = strlen(c->selected_video_rep_id);
             if (strncmp(val, c->selected_video_rep_id, lengthVal)) {
                 xmlFree(val);
                 return 0;
@@ -922,7 +921,6 @@ static int parse_manifest_representation(AVFormatContext *s, const char *url,
         }
         else if (val && c->selected_audio_rep_id && type == AVMEDIA_TYPE_AUDIO) {
             size_t lengthVal = strlen(val);
-            size_t lengthSelected = strlen(c->selected_audio_rep_id);
             if (strncmp(val, c->selected_audio_rep_id, lengthVal)) {
                 xmlFree(val);
                 return 0;
@@ -1340,6 +1338,8 @@ static int parse_manifest(AVFormatContext *s, const char *url, AVIOContext *in)
         if (!av_strcasecmp(val, "dynamic")) {
             c->is_live = 1;
             current_time_sec = get_current_time_in_sec();
+        } else {
+            c->is_live = 0;
         }
         xmlFree(val);
 
@@ -2289,6 +2289,11 @@ static int open_demux_for_component(AVFormatContext *s, struct representation *p
     // Guess the start number using the timeline and duration (if not set)
     pls->start_number = pls->first_seq_no = guess_start_number(c, pls);
     if (!pls->last_seq_no) {
+        if (c->is_live && !calc_max_seg_no(pls, s->priv_data)) {
+            av_log(pls->parent, AV_LOG_WARNING, "DASH manifest has no valid segments\n");
+            ret = AVERROR_INVALIDDATA;
+            return ret;
+        }
         pls->last_seq_no = calc_max_seg_no(pls, s->priv_data);
     }
     pls->cur_seq_no  = calc_cur_seg_no(s, pls);
@@ -2515,7 +2520,7 @@ static int dash_read_packet(AVFormatContext *s, AVPacket *pkt)
     AVDictionary* metadata_dict = NULL;
     uint8_t* metadata_dict_packed = NULL;
     DASHContext *c = s->priv_data;
-    int metadata_dict_size = 0;
+    size_t metadata_dict_size = 0;
     int ret = 0, i;
     int64_t mints = 0;
     struct representation *cur = NULL;
