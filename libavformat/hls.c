@@ -1805,13 +1805,13 @@ static int read_data(void *opaque, uint8_t *buf, int buf_size)
 
     if (av_log_get_level() >= AV_LOG_DEBUG) {
         if (ret >= 0) {
-            av_log(NULL, AV_LOG_DEBUG, "==========read_from_url  %d\n", ret);
+            av_log(NULL, AV_LOG_DEBUG, "Read_from_url  %d\n", ret);
         }
         else {
             // Get error string from ret value
             char errbuf[1024];
             av_strerror(ret, errbuf, sizeof(errbuf));
-            av_log(NULL, AV_LOG_DEBUG, "==========read_from_url  %s\n", errbuf);
+            av_log(NULL, AV_LOG_DEBUG, "Read_from_url  %s\n", errbuf);
         }
     }
 
