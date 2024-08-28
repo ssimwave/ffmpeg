@@ -1803,14 +1803,16 @@ static int read_data(void *opaque, uint8_t *buf, int buf_size)
     seg = current_segment(v);
     ret = read_from_url(v, seg, buf, buf_size);
 
-    if (ret >= 0) {
-        av_log(NULL, AV_LOG_DEBUG, "==========read_from_url  %d\n", ret);
-    }
-    else {
-        // Get error string from ret value
-        char errbuf[1024];
-        av_strerror(ret, errbuf, sizeof(errbuf));
-        av_log(NULL, AV_LOG_DEBUG, "==========read_from_url  %s\n", errbuf);
+    if (av_log_get_level() >= AV_LOG_DEBUG) {
+        if (ret >= 0) {
+            av_log(NULL, AV_LOG_DEBUG, "==========read_from_url  %d\n", ret);
+        }
+        else {
+            // Get error string from ret value
+            char errbuf[1024];
+            av_strerror(ret, errbuf, sizeof(errbuf));
+            av_log(NULL, AV_LOG_DEBUG, "==========read_from_url  %s\n", errbuf);
+        }
     }
 
     if (ret > 0) {
@@ -2521,9 +2523,8 @@ static int hls_read_packet(AVFormatContext *s, AVPacket *pkt)
                     if (ret == 0) {
                         ret = av_read_frame(pls->ctx, pls->pkt);
                         if (ret == AVERROR_EOF && pls->open_next_segment) {
-                            // Check if packet is corrupt/empty ? If so, skip it and continue with next segment ?
-                            // If packet is corrupt/empty, clear it before reading next packet from next segment ?
-                            av_log(s, AV_LOG_DEBUG, "Empty segment %ld, open next segment and continue...\n", pls->cur_seq_no);
+                            // Check if segment is corrupt/empty ? If so, skip it and continue with next segment
+                            av_log(s, AV_LOG_WARNING, "Empty segment %ld, open next segment and continue...\n", pls->cur_seq_no);
                             continue;
                         }
                     }
