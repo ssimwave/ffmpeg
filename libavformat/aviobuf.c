@@ -991,7 +991,24 @@ void ffio_write_lines(AVIOContext *s, const unsigned char *buf, int size,
 int ffio_copy_url_options(AVIOContext* pb, AVDictionary** avio_opts)
 {
     const char *opts[] = {
-        "headers", "user_agent", "cookies", "http_proxy", "referer", "rw_timeout", "icy", NULL };
+        "http_proxy",
+        "headers",
+        "multiple_requests",
+        "user_agent",
+        "referer", 
+        "cookies", 
+        "http_proxy",
+        "rw_timeout",
+        "icy",
+        "send_expect_100",
+        "reconnect",
+        "reconnect_at_eof",
+        "reconnect_on_network_error",
+        "reconnect_on_http_error",
+        "reconnect_streamed",
+        "reconnect_delay_max",
+        NULL 
+    };
     const char **opt = opts;
     uint8_t *buf = NULL;
     int ret = 0;
