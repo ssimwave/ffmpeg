@@ -1634,6 +1634,12 @@ reload:
                 if (ret != AVERROR_EXIT)
                     av_log(v->parent, AV_LOG_WARNING, "Failed to reload playlist %d\n",
                            v->index);
+                if (ret == AVERROR_HTTP_NOT_FOUND) {
+                    av_log(v->parent, AV_LOG_DEBUG, "Going to reload playlist %d, reload count %d\n",
+                           v->index, reload_count);
+                    av_usleep(reload_interval);
+                    goto reload;
+                }
                 return ret;
             }
 
