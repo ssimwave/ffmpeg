@@ -2857,7 +2857,7 @@ static const AVOption hls_options[] = {
         {.str = ""}, 0, 0, FLAGS},
     { "use_independent_segment_fetch_for_obtaining_size", "Use patch for obtaining segment size (ie. double download)",
         OFFSET(use_independent_segment_fetch_for_obtaining_size), AV_OPT_TYPE_BOOL, {.i64 = 0}, 0, 1, FLAGS},
-    { "reload_variant_playlist_on_http_error", "Reload when faild to get the variant playlist during processing segments.",
+    { "reload_variant_playlist_on_http_error", "Reload when failed to get the variant playlist during processing segments.",
         OFFSET(reload_variant_playlist_on_http_error), AV_OPT_TYPE_BOOL, {.i64 = 0}, 0, 1, FLAGS},
     {NULL}
 };
