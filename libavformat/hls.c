@@ -256,6 +256,7 @@ typedef struct HLSContext {
     char *sample_aes_iv;
     char *sample_aes_cek_location;
     int use_independent_segment_fetch_for_obtaining_size;
+    int reload_variant_playlist_on_http_error;
 } HLSContext;
 
 static int64_t get_actual_segment_size(struct playlist *pls, struct segment* seg) {
@@ -1634,6 +1635,22 @@ reload:
                 if (ret != AVERROR_EXIT)
                     av_log(v->parent, AV_LOG_WARNING, "Failed to reload playlist %d\n",
                            v->index);
+                if (c->reload_variant_playlist_on_http_error) {
+                    switch (ret) {
+                        case AVERROR_HTTP_NOT_FOUND:
+                        case AVERROR_HTTP_OTHER_4XX:
+                        case AVERROR_HTTP_SERVER_ERROR:
+                            {
+                                av_log(v->parent, AV_LOG_DEBUG, "Going to reload playlist %d, reload count %d\n",
+                                    v->index, reload_count);
+                                av_usleep(reload_interval);
+                                goto reload;
+                            }
+                            break;
+                        default:
+                            break;
+                    }
+                }
                 return ret;
             }
 
@@ -2840,6 +2857,8 @@ static const AVOption hls_options[] = {
         {.str = ""}, 0, 0, FLAGS},
     { "use_independent_segment_fetch_for_obtaining_size", "Use patch for obtaining segment size (ie. double download)",
         OFFSET(use_independent_segment_fetch_for_obtaining_size), AV_OPT_TYPE_BOOL, {.i64 = 0}, 0, 1, FLAGS},
+    { "reload_variant_playlist_on_http_error", "Reload when failed to get the variant playlist during processing segments.",
+        OFFSET(reload_variant_playlist_on_http_error), AV_OPT_TYPE_BOOL, {.i64 = 0}, 0, 1, FLAGS},
     {NULL}
 };
 
