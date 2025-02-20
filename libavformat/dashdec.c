@@ -2290,9 +2290,11 @@ static int open_demux_for_component(AVFormatContext *s, struct representation *p
     if (!pls->last_seq_no) {
         pls->last_seq_no = calc_max_seg_no(pls, s->priv_data);
         if (!pls->last_seq_no) {
-            av_log(pls->parent, AV_LOG_ERROR, "DASH missing valid timeline or segments\n");
-            ret = AVERROR_INVALIDDATA;
-            goto fail;
+            if (c->is_live) {
+                av_log(pls->parent, AV_LOG_WARNING, "DASH manifest has no valid segments\n");
+                ret = AVERROR(EAGAIN);
+                goto fail;
+            }
         }
     }
     pls->cur_seq_no  = calc_cur_seg_no(s, pls);
