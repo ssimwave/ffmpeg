@@ -1338,6 +1338,8 @@ static int parse_manifest(AVFormatContext *s, const char *url, AVIOContext *in)
         if (!av_strcasecmp(val, "dynamic")) {
             c->is_live = 1;
             current_time_sec = get_current_time_in_sec();
+        } else {
+            c->is_live = 0;
         }
         xmlFree(val);
 
