@@ -2292,7 +2292,7 @@ static int open_demux_for_component(AVFormatContext *s, struct representation *p
         if (!pls->last_seq_no) {
             av_log(pls->parent, AV_LOG_ERROR, "DASH missing valid timeline or segments\n");
             ret = AVERROR_INVALIDDATA
-            goto fail:
+            goto fail;
         }
     }
     pls->cur_seq_no  = calc_cur_seg_no(s, pls);
