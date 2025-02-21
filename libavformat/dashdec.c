@@ -2290,7 +2290,7 @@ static int open_demux_for_component(AVFormatContext *s, struct representation *p
     if (!pls->last_seq_no) {
         if (c->is_live && !calc_max_seg_no(pls, s->priv_data)) {
             av_log(pls->parent, AV_LOG_WARNING, "DASH manifest has no valid segments\n");
-            ret = AVERROR(EAGAIN);
+            ret = AVERROR_INVALIDDATA;
             goto fail;
         }
         pls->last_seq_no = calc_max_seg_no(pls, s->priv_data);
