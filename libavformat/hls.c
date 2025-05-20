@@ -2529,7 +2529,7 @@ static int hls_read_packet(AVFormatContext *s, AVPacket *pkt)
                 ret = av_read_frame(pls->ctx, pls->pkt);
 
                 // Subsequent segment file(s) are opened and first frame is read,
-                // only after all packets for the current segment are read
+                // only after all packets for the current segment are read (or after seek)
                 // Skip corrupted/empty segments and continue as long as new segment is requested
                 while (ret == AVERROR_EOF && pls->open_next_segment) {
                     pls->cur_seq_no++;
@@ -2789,6 +2789,7 @@ static int hls_read_seek(AVFormatContext *s, int stream_index,
 
         pls->seek_timestamp = seek_timestamp;
         pls->seek_flags = flags;
+        pls->open_next_segment = 1;
 
         if (pls != seek_pls) {
             /* set closest segment seq_no for playlists not handled above */
