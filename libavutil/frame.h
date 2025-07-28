@@ -729,7 +729,8 @@ typedef struct AVFrame {
      * @deprecated use AV_CODEC_FLAG_COPY_OPAQUE to pass through arbitrary user
      *             data from packets to frames
      */
-    attribute_deprecated
+    // TODO investigate updating client code to use AVPacket instead
+    // attribute_deprecated
     int pkt_size;
 #endif
 
