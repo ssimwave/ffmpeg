@@ -289,6 +289,18 @@ static int decode_frame_header(ProresContext *ctx, const uint8_t *buf,
     ctx->frame->color_trc       = buf[15];
     ctx->frame->colorspace      = buf[16];
     ctx->frame->color_range     = AVCOL_RANGE_MPEG;
+    if (avctx->color_primaries == AVCOL_PRI_UNSPECIFIED) {
+        avctx->color_primaries = ctx->frame->color_primaries;
+    }
+    if (avctx->color_trc == AVCOL_TRC_UNSPECIFIED) {
+        avctx->color_trc = ctx->frame->color_trc;
+    }
+    if (avctx->colorspace == AVCOL_SPC_UNSPECIFIED) {
+        avctx->colorspace = ctx->frame->colorspace;
+    }
+    if (avctx->color_range == AVCOL_RANGE_UNSPECIFIED) {
+        avctx->color_range = ctx->frame->color_range;
+    }
 
     ptr   = buf + 20;
     flags = buf[19];
