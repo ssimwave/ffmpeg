@@ -280,12 +280,21 @@ int ff_img_read_header(AVFormatContext *s1)
         }
         }
         if ((s->pattern_type == PT_GLOB_SEQUENCE && !s->use_glob) || s->pattern_type == PT_SEQUENCE) {
-            if (find_image_range(s1->pb, &first_index, &last_index, s->path,
-                                 s->start_number, s->start_number_range) < 0) {
-                av_log(s1, AV_LOG_ERROR,
-                       "Could find no file with path '%s' and index in the range %d-%d\n",
-                       s->path, s->start_number, s->start_number + s->start_number_range - 1);
-                return AVERROR(ENOENT);
+            if (s->disable_find_image_range) {
+                first_index = s->start_number;
+                last_index = s->last_number;
+                if (first_index > last_index) {
+                    av_log(s1, AV_LOG_ERROR, "disable_find_image_range was specified but last_number is not set, or is less than start_number\n");
+                    return AVERROR(ENOENT);
+                }
+            } else {
+                if (find_image_range(s1->pb, &first_index, &last_index, s->path,
+                                    s->start_number, s->start_number_range) < 0) {
+                    av_log(s1, AV_LOG_ERROR,
+                        "Could find no file with path '%s' and index in the range %d-%d\n",
+                        s->path, s->start_number, s->start_number + s->start_number_range - 1);
+                    return AVERROR(ENOENT);
+                }
             }
         } else if (s->pattern_type == PT_GLOB) {
 #if HAVE_GLOB
@@ -629,6 +638,8 @@ const AVOption ff_img_options[] = {
     { "none",         "disable pattern matching",            0, AV_OPT_TYPE_CONST,  {.i64=PT_NONE         }, INT_MIN, INT_MAX, DEC, .unit = "pattern_type" },
     { "start_number", "set first number in the sequence",    OFFSET(start_number), AV_OPT_TYPE_INT,    {.i64 = 0   }, INT_MIN, INT_MAX, DEC },
     { "start_number_range", "set range for looking at the first sequence number", OFFSET(start_number_range), AV_OPT_TYPE_INT, {.i64 = 5}, 1, INT_MAX, DEC },
+    { "last_number", "set last number in the sequence",    OFFSET(last_number), AV_OPT_TYPE_INT,    {.i64 = 0   }, INT_MIN, INT_MAX, DEC },
+    { "disable_find_image_range", "disable image range search. Use start_number and start_number_range to determine first and last index", OFFSET(disable_find_image_range), AV_OPT_TYPE_INT,    {.i64 = 1   }, 0, 1, DEC },
     { "ts_from_file", "set frame timestamp from file's one", OFFSET(ts_from_file), AV_OPT_TYPE_INT,    {.i64 = 0   }, 0, 2,       DEC, .unit = "ts_type" },
     { "none", "none",                   0, AV_OPT_TYPE_CONST,    {.i64 = 0   }, 0, 2,       DEC, .unit = "ts_type" },
     { "sec",  "second precision",       0, AV_OPT_TYPE_CONST,    {.i64 = 1   }, 0, 2,       DEC, .unit = "ts_type" },

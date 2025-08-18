@@ -59,6 +59,8 @@ typedef struct VideoDemuxData {
 #endif
     int start_number;
     int start_number_range;
+    int last_number;
+    int disable_find_image_range; /** < disabled when set to 1> */
     int frame_size;
     int ts_from_file;
     int export_path_metadata; /**< enabled when set to 1. */
