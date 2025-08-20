@@ -195,7 +195,9 @@ static av_cold void join_uninit(AVFilterContext *ctx)
     for (i = 0; i < s->inputs && s->input_frames; i++) {
         av_frame_free(&s->input_frames[i]);
     }
-
+    if (s->ch_layout.u.map && (s->ch_layout.order == AV_CHANNEL_ORDER_CUSTOM)) {
+        av_freep(&s->ch_layout.u.map);
+    }
     av_freep(&s->channels);
     av_freep(&s->buffers);
     av_freep(&s->input_frames);
