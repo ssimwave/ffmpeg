@@ -93,6 +93,8 @@ typedef struct SRTContext {
     SRT_TRANSTYPE transtype;
     int linger;
     int tsbpd;
+    char *localip;
+    char *localport;
 } SRTContext;
 
 #define D AV_OPT_FLAG_DECODING_PARAM
@@ -146,6 +148,8 @@ static const AVOption libsrt_options[] = {
     { "file",           NULL, 0, AV_OPT_TYPE_CONST,  { .i64 = SRTT_FILE }, INT_MIN, INT_MAX, .flags = D|E, .unit = "transtype" },
     { "linger",         "Number of seconds that the socket waits for unsent data when closing", OFFSET(linger),           AV_OPT_TYPE_INT,      { .i64 = -1 }, -1, INT_MAX,   .flags = D|E },
     { "tsbpd",          "Timestamp-based packet delivery",                                      OFFSET(tsbpd),            AV_OPT_TYPE_BOOL,     { .i64 = -1 }, -1, 1,         .flags = D|E },
+    { "localip",        "localip desc",                                                         OFFSET(localip),          AV_OPT_TYPE_STRING,   { .str = NULL },              .flags = D|E },
+    { "localport",      "localport desc",                                                       OFFSET(localport),        AV_OPT_TYPE_STRING,   { .str = NULL },              .flags = D|E },
     { NULL }
 };
 
@@ -393,6 +397,7 @@ static int libsrt_setup(URLContext *h, const char *uri, int flags)
     char portstr[10];
     int64_t open_timeout = 0;
     int eid;
+    struct sockaddr_in la;
 
     av_url_split(proto, sizeof(proto), NULL, 0, hostname, sizeof(hostname),
         &port, path, sizeof(path), uri);
@@ -428,6 +433,25 @@ static int libsrt_setup(URLContext *h, const char *uri, int flags)
     }
 
     cur_ai = ai;
+
+    if (s->mode == SRT_MODE_RENDEZVOUS) {
+        int lp;
+        if(s->localip == NULL || s->localport == NULL) {
+            av_log(h, AV_LOG_ERROR, "Invalid adapter configuration\n");
+            return AVERROR(EIO);
+        }
+        av_log(h, AV_LOG_DEBUG , "Adapter options %s:%s\n", s->localip, s->localport);
+
+        lp = strtol(s->localport, NULL, 10);
+        if (lp < 0 || lp >= 65536) {
+            av_log(h, AV_LOG_ERROR, "Local port missing in uri\n");
+            return AVERROR(EINVAL);
+        }
+
+        la.sin_family = AF_INET;
+        la.sin_port = htons(lp);
+        la.sin_addr.s_addr = inet_addr(s->localip);
+    }
 
  restart:
 
@@ -472,7 +496,7 @@ static int libsrt_setup(URLContext *h, const char *uri, int flags)
         if (ret < 0)
             goto fail1;
         if (s->mode == SRT_MODE_RENDEZVOUS) {
-            if (srt_bind(fd, cur_ai->ai_addr, cur_ai->ai_addrlen)) {
+            if (srt_bind(fd, (struct sockaddr *)&la, sizeof(struct sockaddr_in))) {
                 ret = libsrt_neterrno(h);
                 srt_epoll_release(write_eid);
                 goto fail1;
@@ -626,6 +650,12 @@ static int libsrt_open(URLContext *h, const char *uri, int flags)
                 ret = AVERROR(EINVAL);
                 goto err;
             }
+        }
+        if (av_find_info_tag(buf, sizeof(buf), "localip", p)) {
+            s->localip = av_strndup(buf, strlen(buf));
+        }
+        if (av_find_info_tag(buf, sizeof(buf), "localport", p)) {
+            s->localport = av_strndup(buf, strlen(buf));
         }
         if (av_find_info_tag(buf, sizeof(buf), "sndbuf", p)) {
             s->sndbuf = strtol(buf, NULL, 10);
