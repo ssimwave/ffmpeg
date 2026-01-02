@@ -94,7 +94,7 @@ typedef struct SRTContext {
     int linger;
     int tsbpd;
     char *localaddr;
-    char *localport;
+    int localport;
 } SRTContext;
 
 #define D AV_OPT_FLAG_DECODING_PARAM
@@ -655,11 +655,11 @@ static int libsrt_open(URLContext *h, const char *uri, int flags)
                 goto err;
             }
         }
-        if (av_find_info_tag(buf, sizeof(buf), "localip", p)) {
-            s->localip = av_strndup(buf, strlen(buf));
+        if (av_find_info_tag(buf, sizeof(buf), "localaddr", p)) {
+            s->localaddr = av_strndup(buf, strlen(buf));
         }
         if (av_find_info_tag(buf, sizeof(buf), "localport", p)) {
-            s->localport = av_strndup(buf, strlen(buf));
+            s->localport = strtol(buf, NULL, 10);
         }
         if (av_find_info_tag(buf, sizeof(buf), "sndbuf", p)) {
             s->sndbuf = strtol(buf, NULL, 10);
