@@ -443,12 +443,6 @@ static int libsrt_setup(URLContext *h, const char *uri, int flags)
             la.sin_port = sin->sin_port;
         }
 
-        if (s->port < -1 || s->port >= 65536) {
-            av_log(h, AV_LOG_ERROR, "Invalid local port in uri\n");
-            ret = AVERROR(EINVAL);
-            goto fail1;
-        }
-
         if (s->port != -1) {
             la.sin_port = htons(s->port);
         }
