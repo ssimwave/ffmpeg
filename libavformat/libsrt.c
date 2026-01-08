@@ -149,7 +149,7 @@ static const AVOption libsrt_options[] = {
     { "linger",         "Number of seconds that the socket waits for unsent data when closing", OFFSET(linger),           AV_OPT_TYPE_INT,      { .i64 = -1 }, -1, INT_MAX,   .flags = D|E },
     { "tsbpd",          "Timestamp-based packet delivery",                                      OFFSET(tsbpd),            AV_OPT_TYPE_BOOL,     { .i64 = -1 }, -1, 1,         .flags = D|E },
     { "adapter",        "IP address of network card to use in rendezvous mode",                 OFFSET(adapter),          AV_OPT_TYPE_STRING,   { .str = NULL },              .flags = D|E },
-    { "port",           "Local port to use in rendezvous mode",                                 OFFSET(port),             AV_OPT_TYPE_INT,      { .i64 = -1 }, -1, 65535      .flags = D|E },
+    { "port",           "Local port to use in rendezvous mode",                                 OFFSET(port),             AV_OPT_TYPE_INT,      { .i64 = -1 }, -1, 65535,     .flags = D|E },
     { NULL }
 };
 
