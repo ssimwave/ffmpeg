@@ -596,6 +596,10 @@ void avcodec_string(char *buf, int buf_size, AVCodecContext *enc, int encode)
                     field_order = "top coded first (swapped)";
                 else if (enc->field_order == AV_FIELD_BT)
                     field_order = "bottom coded first (swapped)";
+                else if (enc->field_order == AV_FIELD_PAIRED_TB)
+                    field_order = "field paired top first";
+                else if (enc->field_order == AV_FIELD_PAIRED_BT)
+                    field_order = "field paired bottom first";
 
                 av_bprintf(&bprint, "%s, ", field_order);
             }
